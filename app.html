@@ -32,6 +32,9 @@
     font: inherit; padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px; width: 100%;
   }
   input[type=color] { width: 100%; height: 34px; border: 1px solid var(--border); border-radius: 7px; padding: 2px; }
+  input[type=color]:disabled { opacity: 0.3; }
+  .slab { display: flex; align-items: center; gap: 12px; }
+  label.check { flex-direction: row; align-items: center; gap: 6px; flex: none; cursor: pointer; }
   .row { display: flex; gap: 10px; }
   .row label { flex: 1; }
   button {
@@ -56,7 +59,10 @@
     <label>Size<span>longest side, mm</span><input id="size" type="number" value="150" min="1" step="1"></label>
     <label>Height<span>Z, mm</span><input id="height" type="number" value="5" min="0.1" step="0.5"></label>
   </div>
-  <label>Slab color<input id="bgColor" type="color" value="#808080"></label>
+  <div class="slab">
+    <label class="check"><input id="slab" type="checkbox" checked>Slab</label>
+    <input id="bgColor" type="color" value="#808080" title="Slab color">
+  </div>
   <label>Lift pieces<span>preview only</span><input id="lift" type="range" min="0" max="3" step="0.05" value="0"></label>
   <button id="download" disabled>Download STEP</button>
   <div id="status"></div>
@@ -161,7 +167,8 @@ async function convert() {
   setStatus("Converting…");
   const body = JSON.stringify({
     svg: svg.text, name: svg.name,
-    size: $("size").value, height: $("height").value, bgColor: $("bgColor").value,
+    size: $("size").value, height: $("height").value,
+    bgColor: $("slab").checked ? $("bgColor").value : null,
   });
   try {
     const response = await fetch("/convert", { method: "POST", body });
@@ -201,7 +208,28 @@ for (const target of [drop, main]) {
     loadFile(e.dataTransfer.files[0]);
   });
 }
-for (const id of ["size", "height", "bgColor"]) $(id).addEventListener("input", convertSoon);
+const SETTINGS_KEY = "svg2step.settings";
+const settingIds = ["size", "height", "slab", "bgColor", "lift"];
+const valueKey = (el) => (el.type === "checkbox" ? "checked" : "value");
+
+function saveSettings() {
+  const settings = Object.fromEntries(settingIds.map((id) => [id, $(id)[valueKey($(id))]]));
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
+}
+
+function restoreSettings() {
+  let settings = {};
+  try { settings = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch {}
+  for (const id of settingIds) if (id in settings) $(id)[valueKey($(id))] = settings[id];
+}
+
+function syncSlabColor() { $("bgColor").disabled = !$("slab").checked; }
+
+restoreSettings();
+syncSlabColor();
+for (const id of settingIds) $(id).addEventListener("input", saveSettings);
+for (const id of ["size", "height", "bgColor", "slab"]) $(id).addEventListener("input", convertSoon);
+$("slab").addEventListener("input", syncSlabColor);
 $("size").addEventListener("input", () => { fitted = false; });
 $("lift").addEventListener("input", applyLift);
 $("download").onclick = () => { location.href = "/model.step"; };

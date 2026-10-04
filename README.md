@@ -22,7 +22,7 @@ python3.13 -m venv .venv
 
 - `--size`: longest side of the slab, in mm. The SVG scales uniformly to fit.
 - `--height`: extrusion height, in mm.
-- `--bg-color`: slab color, default `#808080`.
+- `--bg-color`: slab color, default `#808080`. Use `none` for pieces only, no slab.
 - `-o`: output path, default `art.step` next to the SVG.
 
 ## Limitations
@@ -35,4 +35,4 @@ python3.13 -m venv .venv
 
 Double-click `Start SVG to STEP.command` in Finder. The first run sets up the Python environment (about a minute). Close the Terminal window to stop the app. From a shell, `.venv/bin/python app.py` does the same.
 
-It opens a local page at http://localhost:8765. Drop in an SVG, adjust size, height and slab color, and the 3D preview updates live. "Lift pieces" raises the colored pieces off the slab to check the fit. Download STEP saves the current model.
+It opens a local page at http://localhost:8765. Drop in an SVG, adjust size, height and slab color (or turn the slab off), and the 3D preview updates live. Settings are remembered between visits. "Lift pieces" raises the colored pieces off the slab to check the fit. Download STEP saves the current model.

@@ -70,11 +70,15 @@ def to_hex(rgb):
 
 
 def parse_hex(value):
+    """RGB from "#rrggbb", or None for "none"."""
+    if not value or value.lower() == "none":
+        return None
     value = value.lstrip("#")
     return tuple(int(value[i:i + 2], 16) / 255 for i in (0, 2, 4))
 
 
 def build(svg_path, size, height, bg_color):
+    """bg_color of None leaves out the slab, so only the pieces are built."""
     # build123d's automatic clean would also unify edges; see merge_touching.
     with SkipClean():
         return _build(svg_path, size, height, bg_color)
@@ -97,14 +101,14 @@ def _build(svg_path, size, height, bg_color):
 
     solids = [
         to_solid(face, f"background-{i}", bg_color)
-        for i, face in enumerate(cut(canvas, covered), 1)
+        for i, face in enumerate(cut(canvas, covered) if bg_color else [], 1)
     ]
     for rgb, faces in by_color.items():
         for i, face in enumerate(merge_touching(faces), 1):
             solids.append(to_solid(face, f"{to_hex(rgb)}-{i}", rgb))
 
-    # Place the slab's corner at the origin, sitting on the XY plane.
-    corner = Compound(solids).bounding_box().min
+    # Place the canvas corner at the origin, so pieces land in the same spot with or without the slab.
+    corner = Vector(vb.x, vb.y) * scale
     solids = [solid.translate(-corner) for solid in solids]
     return Compound(label=Path(svg_path).stem, children=solids), by_color
 
@@ -113,11 +117,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("svg", type=Path)
     parser.add_argument("--size", type=float, required=True,
-                        help="length of the longest side of the slab, in mm")
+                        help="length of the longest side of the SVG canvas, in mm")
     parser.add_argument("--height", type=float, required=True,
                         help="extrusion height (Z), in mm")
     parser.add_argument("--bg-color", default="#808080",
-                        help="color of the slab the shapes are cut from (default gray)")
+                        help='color of the slab the shapes are cut from (default gray), or "none" for no slab')
     parser.add_argument("-o", "--output", type=Path,
                         help="output STEP path (default: alongside the SVG)")
     args = parser.parse_args()
