@@ -1,6 +1,13 @@
 # svg-to-step
 
-Turns an SVG into a flat, colored STEP "puzzle". Built for importing into Shapr3D and printing on a multi-material (tool-changer) printer.
+Turns an SVG into a flat, colored STEP model. Built for importing into Shapr3D and printing on a multi-material (tool-changer) printer.
+
+There are two modes:
+
+- **Puzzle** (default): full-height pieces set into a slab, described below.
+- **Layers**: one equal-thickness layer per color, stacked in area order (largest or smallest first). Each layer covers its own color plus every color above it, so the bottom layer is solid and each color shows from the top at its own step height. With the slab on, the slab is the bottom layer.
+
+Puzzle mode details:
 
 - The SVG canvas (viewBox) becomes a gray slab with every painted shape cut out of it.
 - Each visible, connected, single-color region becomes its own solid, colored to match the SVG. It fills its cutout exactly, with no clearance.
@@ -23,6 +30,8 @@ python3.13 -m venv .venv
 - `--size`: longest side of the slab, in mm. The SVG scales uniformly to fit.
 - `--height`: extrusion height, in mm.
 - `--bg-color`: slab color, default `#808080`. Use `none` for pieces only, no slab.
+- `--mode`: `puzzle` (default) or `layers`.
+- `--order`: layers mode stacking, `large` (default) or `small` area first.
 - `-o`: output path, default `art.step` next to the SVG.
 
 ## Limitations
@@ -35,4 +44,4 @@ python3.13 -m venv .venv
 
 Double-click `Start SVG to STEP.command` in Finder. The first run sets up the Python environment (about a minute). Close the Terminal window to stop the app. From a shell, `.venv/bin/python app.py` does the same.
 
-It opens a local page at http://localhost:8765. Drop in an SVG, adjust size, height and slab color (or turn the slab off), and the 3D preview updates live. Settings are remembered between visits. "Lift pieces" raises the colored pieces off the slab to check the fit. Download STEP saves the current model.
+It opens a local page at http://localhost:8765. Drop in an SVG, adjust size, height and slab color (or turn the slab off), and the 3D preview updates live. Settings are remembered between visits. "Explode" lifts pieces or layers apart to check the fit. Download STEP saves the current model.

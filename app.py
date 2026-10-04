@@ -29,6 +29,7 @@ def mesh(solid):
         return None
     return {
         "label": solid.label,
+        "level": solid.level,
         "color": to_hex(tuple(solid.color)[:3]),
         "positions": [round(c, 4) for v in vertices for c in (v.X, v.Y, v.Z)],
         "indices": [i for tri in triangles for i in tri],
@@ -42,7 +43,7 @@ def convert(params):
     with build_lock:
         model, by_color = build(
             f.name, float(params["size"]), float(params["height"]),
-            parse_hex(params["bgColor"]),
+            parse_hex(params["bgColor"]), params["mode"], params["order"],
         )
         model.label = stem
         with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as out:
