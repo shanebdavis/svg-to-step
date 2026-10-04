@@ -30,3 +30,11 @@ python3.13 -m venv .venv
 - Only fills become geometry. Strokes are ignored; convert them to paths first (Inkscape: Path > Stroke to Path).
 - `fill-rule` is treated as even-odd. A nonzero path whose subpaths overlap in the same direction (e.g. a self-intersecting star) gets holes where the browser shows fill.
 - Gradients and patterns are not supported; use flat colors.
+
+## GUI
+
+```sh
+.venv/bin/python app.py
+```
+
+Opens a local page at http://localhost:8765. Drop in an SVG, adjust size, height and slab color, and the 3D preview updates live. "Lift pieces" raises the colored pieces off the slab to check the fit. Download STEP saves the current model.

@@ -75,6 +75,12 @@ def parse_hex(value):
 
 
 def build(svg_path, size, height, bg_color):
+    # build123d's automatic clean would also unify edges; see merge_touching.
+    with SkipClean():
+        return _build(svg_path, size, height, bg_color)
+
+
+def _build(svg_path, size, height, bg_color):
     painted, vb = load_painted_faces(svg_path)
     scale = size / max(vb.width, vb.height)
     # The importer reports the viewBox already flipped into Y-up coordinates.
@@ -116,9 +122,7 @@ def main():
                         help="output STEP path (default: alongside the SVG)")
     args = parser.parse_args()
 
-    # build123d's automatic clean would also unify edges; see merge_touching.
-    with SkipClean():
-        model, by_color = build(args.svg, args.size, args.height, parse_hex(args.bg_color))
+    model, by_color = build(args.svg, args.size, args.height, parse_hex(args.bg_color))
     output = args.output or args.svg.with_suffix(".step")
     export_step(model, str(output))
 
