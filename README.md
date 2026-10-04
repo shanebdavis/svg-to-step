@@ -5,7 +5,7 @@ Turns an SVG into a flat, colored STEP model. Built for importing into Shapr3D a
 There are two modes:
 
 - **Puzzle** (default): full-height pieces set into a slab, described below.
-- **Layers**: one equal-thickness layer per color, stacked in area order (largest or smallest first). Each layer covers its own color plus every color above it, so the bottom layer is solid and each color shows from the top at its own step height. With the slab on, the slab is the bottom layer.
+- **Layers**: one layer per color, stacked in area order (largest or smallest first). Each layer covers its own color plus every color above it, so the bottom layer is solid and each color shows from the top at its own step height. With the slab on, the slab is the bottom layer.
 
 Puzzle mode details:
 
@@ -33,6 +33,7 @@ python3.13 -m venv .venv
 - `--min-area`: regions smaller than this (mm², default 0.5) merge into the neighbor they share the most border with. Removes unprintable slivers left by nearly coincident edges in the artwork.
 - `--mode`: `puzzle` (default) or `layers`.
 - `--order`: layers mode stacking, `large` (default) or `small` area first.
+- `--layer-thickness`: layers mode, fixed mm per layer. Default splits the height evenly. If layers × thickness exceeds the height, the model gets taller; if it falls short, the bottom layer takes the extra.
 - `-o`: output path, default `art.step` next to the SVG.
 
 ## Limitations

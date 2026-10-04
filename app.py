@@ -44,6 +44,7 @@ def convert(params):
         model, by_color = build(
             f.name, float(params["size"]), float(params["height"]),
             parse_hex(params["bgColor"]), params["mode"], params["order"],
+            layer_thickness=float(params["layerThickness"]) if params.get("layerThickness") else None,
         )
         model.label = stem
         with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as out:

@@ -4,8 +4,8 @@ Puzzle mode: the SVG canvas becomes a solid slab with every painted shape cut
 out of it. Each visible connected region of a single color becomes its own
 solid that fills its cutout exactly.
 
-Layers mode: one equal-thickness layer per color, stacked so each color shows
-from the top at its own step height.
+Layers mode: one layer per color, stacked so each color shows from the top at
+its own step height.
 
 Either way, overlaps resolve by paint order, so the top view shows exactly what
 the SVG renders.
@@ -126,24 +126,38 @@ def parse_hex(value):
     return tuple(int(value[i:i + 2], 16) / 255 for i in (0, 2, 4))
 
 
-def build(svg_path, size, height, bg_color, mode="puzzle", order="large", min_area=0.5):
+def layer_thicknesses(count, height, layer_thickness=None):
+    """Bottom-up thickness of each layer.
+
+    Auto (None) splits height evenly. A fixed thickness that needs more than
+    height raises the total; one that needs less gives the rest to the bottom layer.
+    """
+    if layer_thickness is None:
+        return [height / count] * count
+    bottom = max(layer_thickness, height - layer_thickness * (count - 1))
+    return [bottom] + [layer_thickness] * (count - 1)
+
+
+def build(svg_path, size, height, bg_color, mode="puzzle", order="large", min_area=0.5,
+          layer_thickness=None):
     """bg_color of None leaves out the slab, so only the SVG's colors are built.
 
     Regions smaller than min_area (mm²) merge into their largest-border neighbor.
 
     mode "puzzle": every color region is a full-height piece set into the slab.
-    mode "layers": one equal-thickness layer per color, stacked by area
-    (order "large" or "small" first). Each layer covers its own color's region
-    plus every region above it, so each color shows from the top at its own step.
+    mode "layers": one layer per color, stacked by area (order "large" or
+    "small" first). Each layer covers its own color's region plus every region
+    above it, so each color shows from the top at its own step. Layer thickness
+    follows layer_thicknesses.
 
     Each solid gets a `level` (0 = bottom) for exploded previews.
     """
     # build123d's automatic clean would also unify edges; see merge_touching.
     with SkipClean():
-        return _build(svg_path, size, height, bg_color, mode, order, min_area)
+        return _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickness)
 
 
-def _build(svg_path, size, height, bg_color, mode, order, min_area):
+def _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickness):
     painted, vb = load_painted_faces(svg_path)
     scale = size / max(vb.width, vb.height)
     # The importer reports the viewBox already flipped into Y-up coordinates.
@@ -177,12 +191,13 @@ def _build(svg_path, size, height, bg_color, mode, order, min_area):
                         reverse=order == "large")
         if bg_color:
             layers.insert(0, (bg_color, background))
-        thickness = height / len(layers)
+        thicknesses = layer_thicknesses(len(layers), height, layer_thickness)
         for level, (rgb, _) in enumerate(layers):
+            z = sum(thicknesses[:level])
             footprint = [face for _, faces in layers[level:] for face in faces]
             for i, face in enumerate(merge_touching(footprint), 1):
                 label = f"L{level + 1}-{to_hex(rgb)}-{i}"
-                solids.append(to_solid(face, label, rgb, level, level * thickness, thickness))
+                solids.append(to_solid(face, label, rgb, level, z, thicknesses[level]))
 
     # Place the canvas corner at the origin, so pieces land in the same spot with or without the slab.
     corner = Vector(vb.x, vb.y) * scale
@@ -206,12 +221,15 @@ def main():
                              "layers: one stacked layer per color")
     parser.add_argument("--order", choices=["large", "small"], default="large",
                         help="layers mode: stack colors largest-area or smallest-area first")
+    parser.add_argument("--layer-thickness", type=float,
+                        help="layers mode: fixed thickness per layer in mm (default: height / layers). "
+                             "Raises the total height if needed; otherwise the bottom layer takes the rest")
     parser.add_argument("-o", "--output", type=Path,
                         help="output STEP path (default: alongside the SVG)")
     args = parser.parse_args()
 
     model, by_color = build(args.svg, args.size, args.height, parse_hex(args.bg_color),
-                            args.mode, args.order, args.min_area)
+                            args.mode, args.order, args.min_area, args.layer_thickness)
     output = args.output or args.svg.with_suffix(".step")
     export_step(model, str(output))
 
