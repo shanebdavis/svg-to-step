@@ -2,3 +2,4 @@
 __pycache__/
 *.step
 .gstack/
+node_modules/
