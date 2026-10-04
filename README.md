@@ -30,6 +30,7 @@ python3.13 -m venv .venv
 - `--size`: longest side of the slab, in mm. The SVG scales uniformly to fit.
 - `--height`: extrusion height, in mm.
 - `--bg-color`: slab color, default `#808080`. Use `none` for pieces only, no slab.
+- `--min-area`: regions smaller than this (mm², default 0.5) merge into the neighbor they share the most border with. Removes unprintable slivers left by nearly coincident edges in the artwork.
 - `--mode`: `puzzle` (default) or `layers`.
 - `--order`: layers mode stacking, `large` (default) or `small` area first.
 - `-o`: output path, default `art.step` next to the SVG.
