@@ -41,7 +41,9 @@ export async function buildModel(svg: string, options: BuildOptions): Promise<Bu
     };
     worker.onerror = (event) => {
       finish();
-      reject(new Error(event.message || "The geometry worker crashed"));
+      const where = event.filename ? ` (${event.filename}:${event.lineno})` : "";
+      console.error("Geometry worker error", event);
+      reject(new Error(`The geometry worker crashed: ${event.message || "no details"}${where}`));
     };
     worker.postMessage({ wasm, svg, options } satisfies BuildRequest);
   });

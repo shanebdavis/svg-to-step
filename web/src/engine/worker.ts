@@ -9,6 +9,12 @@ import { toHex } from "./svg/color";
 
 declare const self: DedicatedWorkerGlobalScope;
 
+const fail = (error: unknown) =>
+  self.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) } satisfies WorkerMessage);
+
+// Failures outside the build's try block, e.g. while instantiating WebAssembly.
+self.onunhandledrejection = (event) => fail(event.reason);
+
 self.onmessage = async ({ data }: MessageEvent<BuildRequest>) => {
   const started = performance.now();
   try {
@@ -16,7 +22,7 @@ self.onmessage = async ({ data }: MessageEvent<BuildRequest>) => {
       print: () => {},
       printErr: () => {},
       instantiateWasm: (imports: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) => {
-        WebAssembly.instantiate(data.wasm, imports).then(receive);
+        WebAssembly.instantiate(data.wasm, imports).then(receive, fail);
         return {};
       },
     }));
@@ -45,6 +51,6 @@ self.onmessage = async ({ data }: MessageEvent<BuildRequest>) => {
     const transfer = [step.buffer, ...meshes.flatMap((m) => [m.positions.buffer, m.indices.buffer])];
     self.postMessage({ ok: true, result } satisfies WorkerMessage, transfer as Transferable[]);
   } catch (error) {
-    self.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) } satisfies WorkerMessage);
+    fail(error);
   }
 };
