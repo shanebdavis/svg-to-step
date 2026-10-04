@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100" width="200" height="100">
+  <!-- red rect, partly covered by the blue circle -->
+  <rect x="10" y="10" width="80" height="60" fill="#e63946"/>
+  <circle cx="80" cy="50" r="30" fill="#1d3557"/>
+  <!-- donut with a hole -->
+  <path fill="#2a9d8f" fill-rule="evenodd"
+        d="M120 50 a30 30 0 0 1 60 0 a30 30 0 0 1 -60 0 Z M135 50 a15 15 0 0 1 30 0 a15 15 0 0 1 -30 0 Z"/>
+  <!-- transformed group, bezier shape, two islands of the same color -->
+  <g transform="translate(110 70) rotate(-10)">
+    <path fill="#f4a261" d="M0 0 C 10 -20, 30 -20, 40 0 S 70 12, 80 0 L 80 15 L 0 15 Z"/>
+  </g>
+  <rect x="20" y="80" width="15" height="12" fill="#f4a261"/>
+  <!-- stroke only: ignored -->
+  <line x1="0" y1="0" x2="200" y2="100" stroke="black"/>
+</svg>
