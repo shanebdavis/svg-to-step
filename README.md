@@ -47,3 +47,24 @@ python3.13 -m venv .venv
 Double-click `Start SVG to STEP.command` in Finder. The first run sets up the Python environment (about a minute). Close the Terminal window to stop the app. From a shell, `.venv/bin/python app.py` does the same.
 
 It opens a local page at http://localhost:8765. Drop in an SVG, adjust size, height and slab color (or turn the slab off), and the 3D preview updates live. Settings are remembered between visits. "Explode" lifts pieces or layers apart to check the fit. Download STEP saves the current model.
+
+## Browser version (web/)
+
+A TypeScript rewrite that runs entirely in the browser: no server, no Python. The CAD engine is the same OpenCascade kernel, compiled to WebAssembly (a ~7 MB gzipped download, cached after the first visit). It builds to static files that any web host can serve.
+
+Double-click `Start SVG to STEP (Web).command`. It builds the app when the sources change (needs Node.js) and serves it at http://localhost:8775.
+
+```sh
+cd web
+npm install
+npm run dev      # development server
+npm test         # parity with svg2step.py, fill rules, SVG parsing, STEP output
+npm run build    # static site in web/dist
+```
+
+Differences from the Python version:
+
+- `fill-rule` is honored: `nonzero` paths fill overlapping and self-intersecting areas the way browsers do.
+- Elliptical arcs and non-uniformly scaled circles become Bezier curves; circles, circular arcs and ellipses stay exact.
+
+`web/test/reference.json` holds svg2step.py results; regenerate it with `.venv/bin/python web/test/make_reference.py` after changing the Python version.

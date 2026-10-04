@@ -302,6 +302,9 @@ export function mesh(shape: TopoDS_Shape, tolerance: number, angularTolerance: n
 
 export interface StepPart { shape: TopoDS_Shape; name: string; color: readonly [number, number, number] }
 
+/** OpenCascade colors are linear; STEP files (and SVG) carry sRGB. */
+const linear = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+
 /** STEP AP214 with a named, colored body per part. */
 export function exportStep(parts: StepPart[]): Uint8Array {
   const text = (s: string) => new oc.TCollection_ExtendedString(s, true);
@@ -313,13 +316,14 @@ export function exportStep(parts: StepPart[]): Uint8Array {
     const label = shapes.NewShape();
     shapes.SetShape(label, part.shape);
     oc.TDataStd_Name.Set(label, text(part.name));
-    colors.SetColor(label, new oc.Quantity_ColorRGBA(...part.color, 1), oc.XCAFDoc_ColorType.XCAFDoc_ColorSurf);
+    const [r, g, b] = part.color.map(linear);
+    colors.SetColor(label, new oc.Quantity_ColorRGBA(r, g, b, 1), oc.XCAFDoc_ColorType.XCAFDoc_ColorSurf);
   }
   shapes.UpdateAssemblies();
   const writer = new oc.STEPCAFControl_Writer(new oc.XSControl_WorkSession(), false);
   writer.SetColorMode(true);
   writer.SetNameMode(true);
-  oc.Interface_Static.SetIVal("write.step.schema", 5);
+  oc.Interface_Static.SetIVal("write.step.schema", 1);
   const path = "/model.step";
   if (!writer.Perform(doc, path, progress())) throw new Error("STEP export failed");
   const bytes = oc.FS.readFile(path);

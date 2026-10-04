@@ -6,6 +6,8 @@ export default defineConfig({
   base: "./",
   plugins: [react()],
   worker: { format: "es" },
+  // three.js alone is ~600 kB; the app is one screen, so splitting buys nothing.
+  build: { chunkSizeWarningLimit: 1200 },
   optimizeDeps: { exclude: ["replicad-opencascadejs"] },
   test: { environment: "node", testTimeout: 120_000 },
 });
