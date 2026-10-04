@@ -57,10 +57,13 @@ Double-click `Start SVG to STEP (Web).command`. It builds the app when the sourc
 ```sh
 cd web
 npm install
-npm run dev      # development server
+npm start        # development server, opens the browser
+npm run serve    # production build, served at http://localhost:8775
 npm test         # parity with svg2step.py, fill rules, SVG parsing, STEP output
 npm run build    # static site in web/dist
 ```
+
+`web/dist` must be served over HTTP. Browsers block module scripts, workers and WebAssembly on pages opened from a file, so opening `dist/index.html` directly shows instructions instead of the app.
 
 Differences from the Python version:
 

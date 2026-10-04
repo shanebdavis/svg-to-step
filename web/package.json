@@ -4,8 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "start": "vite --open",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "serve": "npm run build && vite preview --open --port 8775",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
