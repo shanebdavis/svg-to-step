@@ -1,3 +1,8 @@
 .venv/
 __pycache__/
 *.step
+.gstack/
+node_modules/
+.claude/
+# Third-party artwork used for local testing only
+examples/psg.svg

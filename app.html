@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SVG to STEP</title>
+<style>
+  :root {
+    --bg: #f4f4f2; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73;
+    --border: #d8d8d4; --accent: #2563eb; --error: #c62828;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; height: 100vh; display: flex; background: var(--bg); color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  aside {
+    width: 280px; flex: none; padding: 20px; display: flex; flex-direction: column; gap: 16px;
+    background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto;
+  }
+  h1 { font-size: 17px; margin: 0; }
+  #drop {
+    border: 2px dashed var(--border); border-radius: 10px; padding: 22px 12px; text-align: center;
+    color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  #drop.over { border-color: var(--accent); background: #eef3ff; }
+  #drop strong { color: var(--text); display: block; word-break: break-all; }
+  label { display: flex; flex-direction: column; gap: 4px; font-weight: 500; }
+  label span { color: var(--muted); font-weight: 400; font-size: 12px; }
+  input[type=number] {
+    font: inherit; padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px; width: 100%;
+  }
+  input[type=color] { width: 100%; height: 34px; border: 1px solid var(--border); border-radius: 7px; padding: 2px; }
+  input[type=color]:disabled, select:disabled, input[type=number]:disabled { opacity: 0.4; }
+  select { font: inherit; padding: 7px 6px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); width: 100%; }
+  .slab { display: flex; align-items: center; gap: 12px; }
+  label.check { flex-direction: row; align-items: center; gap: 6px; flex: none; cursor: pointer; }
+  .row { display: flex; gap: 10px; }
+  .row label { flex: 1; }
+  button {
+    font: inherit; font-weight: 600; padding: 10px; border: 0; border-radius: 8px;
+    background: var(--accent); color: white; cursor: pointer;
+  }
+  button:disabled { background: var(--border); color: var(--muted); cursor: default; }
+  #status { color: var(--muted); min-height: 3em; white-space: pre-line; }
+  #status.error { color: var(--error); }
+  main { flex: 1; position: relative; }
+  main canvas { display: block; }
+  #hint { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none; }
+  #help { position: absolute; right: 12px; bottom: 10px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>SVG to STEP</h1>
+  <div id="drop">Drop an SVG here<br>or click to choose<strong id="filename"></strong></div>
+  <input id="file" type="file" accept=".svg,image/svg+xml" hidden>
+  <div class="row">
+    <label>Mode<select id="mode">
+      <option value="puzzle">Puzzle</option>
+      <option value="layers">Layers</option>
+    </select></label>
+    <label>Layer order<select id="order">
+      <option value="large">Largest first</option>
+      <option value="small">Smallest first</option>
+    </select></label>
+  </div>
+  <label>Layer thickness<span>mm; empty for auto (height ÷ layers)</span>
+    <input id="layerThickness" type="number" min="0.05" step="0.1" placeholder="auto"></label>
+  <div class="row">
+    <label>Size<span>longest side, mm</span><input id="size" type="number" value="150" min="1" step="1"></label>
+    <label>Height<span>Z, mm</span><input id="height" type="number" value="5" min="0.1" step="0.5"></label>
+  </div>
+  <div class="slab">
+    <label class="check"><input id="slab" type="checkbox" checked>Slab</label>
+    <input id="bgColor" type="color" value="#808080" title="Slab color">
+  </div>
+  <label>Explode<span>preview only: lifts pieces or layers apart</span><input id="lift" type="range" min="0" max="3" step="0.05" value="0"></label>
+  <button id="download" disabled>Download STEP</button>
+  <div id="status"></div>
+</aside>
+<main>
+  <div id="hint">Drop an SVG to start</div>
+  <div id="help">Drag to orbit · right-drag to pan · scroll to zoom</div>
+</main>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const $ = (id) => document.getElementById(id);
+const main = document.querySelector("main");
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+main.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color("#f4f4f2");
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8a8a, 2.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(1, -2, 3);
+scene.add(sun);
+
+const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100000);
+camera.up.set(0, 0, 1);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+let model = null;
+let svg = null;
+let fitted = false;
+
+function resize() {
+  const { clientWidth: w, clientHeight: h } = main;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+resize();
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+
+function fitCamera(box) {
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = box.getSize(new THREE.Vector3()).length() / 2;
+  const distance = radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2));
+  controls.target.copy(center);
+  camera.position.copy(center).add(new THREE.Vector3(0, -0.75, 1).normalize().multiplyScalar(distance));
+}
+
+function showModel({ meshes }) {
+  if (model) scene.remove(model);
+  model = new THREE.Group();
+  for (const piece of meshes) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(piece.positions, 3));
+    geometry.setIndex(piece.indices);
+    geometry.computeVertexNormals();
+    const solid = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      color: piece.color, roughness: 0.6, flatShading: true,
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+    }));
+    const outline = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geometry, 30),
+      new THREE.LineBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.35 }),
+    );
+    const group = new THREE.Group();
+    group.add(solid, outline);
+    group.userData.level = piece.level;
+    model.add(group);
+  }
+  scene.add(model);
+  applyLift();
+  if (!fitted) { fitCamera(new THREE.Box3().setFromObject(model)); fitted = true; }
+}
+
+function applyLift() {
+  if (!model) return;
+  const levels = Math.max(1, ...model.children.map((group) => group.userData.level));
+  const step = $("lift").value * $("height").value / levels;
+  for (const group of model.children) group.position.z = group.userData.level * step;
+}
+
+function setStatus(text, isError = false) {
+  $("status").textContent = text;
+  $("status").classList.toggle("error", isError);
+}
+
+let pending = 0;
+async function convert() {
+  if (!svg) return;
+  const request = ++pending;
+  setStatus("Converting…");
+  const body = JSON.stringify({
+    svg: svg.text, name: svg.name,
+    size: $("size").value, height: $("height").value,
+    bgColor: $("slab").checked ? $("bgColor").value : null,
+    mode: $("mode").value, order: $("order").value, layerThickness: $("layerThickness").value,
+  });
+  try {
+    const response = await fetch("/convert", { method: "POST", body });
+    const result = await response.json();
+    if (request !== pending) return;
+    if (!response.ok) throw new Error(result.error);
+    showModel(result);
+    const { solids, colors, size } = result.stats;
+    setStatus(`${solids} solids, ${colors} colors\n${size.join(" × ")} mm`);
+    $("download").disabled = false;
+  } catch (error) {
+    if (request === pending) setStatus(error.message, true);
+  }
+}
+
+let timer;
+function convertSoon() { clearTimeout(timer); timer = setTimeout(convert, 350); }
+
+async function loadFile(file) {
+  if (!file) return;
+  svg = { name: file.name, text: await file.text() };
+  $("filename").textContent = file.name;
+  $("hint").hidden = true;
+  fitted = false;
+  convert();
+}
+
+const drop = $("drop");
+drop.onclick = () => $("file").click();
+$("file").onchange = (e) => loadFile(e.target.files[0]);
+for (const target of [drop, main]) {
+  target.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  target.addEventListener("dragleave", () => drop.classList.remove("over"));
+  target.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    loadFile(e.dataTransfer.files[0]);
+  });
+}
+const SETTINGS_KEY = "svg2step.settings";
+const settingIds = ["mode", "order", "layerThickness", "size", "height", "slab", "bgColor", "lift"];
+const valueKey = (el) => (el.type === "checkbox" ? "checked" : "value");
+
+function saveSettings() {
+  const settings = Object.fromEntries(settingIds.map((id) => [id, $(id)[valueKey($(id))]]));
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
+}
+
+function restoreSettings() {
+  let settings = {};
+  try { settings = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch {}
+  for (const id of settingIds) if (id in settings) $(id)[valueKey($(id))] = settings[id];
+}
+
+function syncEnabled() {
+  $("bgColor").disabled = !$("slab").checked;
+  $("order").disabled = $("layerThickness").disabled = $("mode").value !== "layers";
+}
+
+restoreSettings();
+syncEnabled();
+for (const id of settingIds) $(id).addEventListener("input", saveSettings);
+for (const id of ["mode", "order", "layerThickness", "size", "height", "bgColor", "slab"]) {
+  $(id).addEventListener("input", convertSoon);
+}
+for (const id of ["mode", "slab"]) $(id).addEventListener("input", syncEnabled);
+$("size").addEventListener("input", () => { fitted = false; });
+$("lift").addEventListener("input", applyLift);
+$("download").onclick = () => { location.href = "/model.step"; };
+</script>
+</body>
+</html>

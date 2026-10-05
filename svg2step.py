@@ -1,9 +1,14 @@
-"""Convert an SVG into a flat, colored STEP "puzzle".
+"""Convert an SVG into a flat, colored STEP model.
 
-The SVG canvas becomes a solid slab with every painted shape cut out of it.
-Each visible connected region of a single color becomes its own solid that
-fills its cutout exactly. Overlaps resolve by paint order, so the pieces show
-exactly what the SVG renders.
+Puzzle mode: the SVG canvas becomes a solid slab with every painted shape cut
+out of it. Each visible connected region of a single color becomes its own
+solid that fills its cutout exactly.
+
+Layers mode: one layer per color, stacked so each color shows from the top at
+its own step height.
+
+Either way, overlaps resolve by paint order, so the top view shows exactly what
+the SVG renders.
 """
 
 import argparse
@@ -16,6 +21,9 @@ from build123d import (
 from ocpsvg import ColorAndLabel, import_svg_document
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.TopoDS import TopoDS_Face
+
+
+BACKGROUND = "background"
 
 
 def load_painted_faces(svg_path):
@@ -65,16 +73,91 @@ def merge_touching(faces):
     return faces_of(Compound(unify.Shape()))
 
 
+def best_neighbor(sliver, pieces, tolerance):
+    """Index of the piece sharing the most border with sliver, or None."""
+    box = sliver.bounding_box()
+    candidates = [
+        i for i, (_, face) in enumerate(pieces)
+        if not (face.bounding_box().min.X > box.max.X + tolerance
+                or face.bounding_box().max.X < box.min.X - tolerance
+                or face.bounding_box().min.Y > box.max.Y + tolerance
+                or face.bounding_box().max.Y < box.min.Y - tolerance)
+    ]
+    shared = defaultdict(float)
+    samples = 8
+    for edge in sliver.edges() if candidates else []:
+        for j in range(samples):
+            point = edge.position_at((j + 0.5) / samples)
+            distance, i = min((pieces[i][1].distance_to(point), i) for i in candidates)
+            if distance < tolerance:
+                shared[i] += edge.length / samples
+    return max(shared, key=shared.get) if shared else None
+
+
+def absorb_slivers(regions, min_area, tolerance):
+    """Merge regions smaller than min_area into the neighbor sharing the most border.
+
+    Slivers come from nearly coincident edges in the artwork. They are too small
+    to print, and as tiny holes in a larger face they break display meshing.
+    """
+    pieces = [(key, face) for key, faces in regions.items() for face in faces]
+    keep = [piece for piece in pieces if piece[1].area >= min_area]
+    slivers = sorted((p for p in pieces if p[1].area < min_area), key=lambda p: p[1].area)
+    for _, sliver in slivers:
+        i = best_neighbor(sliver, keep, tolerance)
+        if i is not None:
+            key, face = keep[i]
+            keep[i:i + 1] = [(key, merged) for merged in merge_touching([face, sliver])]
+    merged = defaultdict(list)
+    for key, face in keep:
+        merged[key].append(face)
+    return merged
+
+
 def to_hex(rgb):
     return "#" + "".join(f"{round(c * 255):02x}" for c in rgb)
 
 
 def parse_hex(value):
+    """RGB from "#rrggbb", or None for "none"."""
+    if not value or value.lower() == "none":
+        return None
     value = value.lstrip("#")
     return tuple(int(value[i:i + 2], 16) / 255 for i in (0, 2, 4))
 
 
-def build(svg_path, size, height, bg_color):
+def layer_thicknesses(count, height, layer_thickness=None):
+    """Bottom-up thickness of each layer.
+
+    Auto (None) splits height evenly. A fixed thickness that needs more than
+    height raises the total; one that needs less gives the rest to the bottom layer.
+    """
+    if layer_thickness is None:
+        return [height / count] * count
+    bottom = max(layer_thickness, height - layer_thickness * (count - 1))
+    return [bottom] + [layer_thickness] * (count - 1)
+
+
+def build(svg_path, size, height, bg_color, mode="puzzle", order="large", min_area=0.5,
+          layer_thickness=None):
+    """bg_color of None leaves out the slab, so only the SVG's colors are built.
+
+    Regions smaller than min_area (mm²) merge into their largest-border neighbor.
+
+    mode "puzzle": every color region is a full-height piece set into the slab.
+    mode "layers": one layer per color, stacked by area (order "large" or
+    "small" first). Each layer covers its own color's region plus every region
+    above it, so each color shows from the top at its own step. Layer thickness
+    follows layer_thicknesses.
+
+    Each solid gets a `level` (0 = bottom) for exploded previews.
+    """
+    # build123d's automatic clean would also unify edges; see merge_touching.
+    with SkipClean():
+        return _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickness)
+
+
+def _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickness):
     painted, vb = load_painted_faces(svg_path)
     scale = size / max(vb.width, vb.height)
     # The importer reports the viewBox already flipped into Y-up coordinates.
@@ -83,22 +166,41 @@ def build(svg_path, size, height, bg_color):
     ).faces()[0]
 
     by_color, covered = visible_regions(painted, canvas)
+    regions = {rgb: merge_touching(faces) for rgb, faces in by_color.items()}
+    if bg_color:
+        regions[BACKGROUND] = cut(canvas, covered)
+    regions = absorb_slivers(
+        regions, min_area / scale**2, tolerance=max(vb.width, vb.height) * 1e-6
+    )
+    background = regions.pop(BACKGROUND, [])
 
-    def to_solid(face, label, rgb):
-        solid = extrude(face.scale(scale), amount=height)
-        solid.label, solid.color = label, Color(*rgb)
+    def to_solid(face, label, rgb, level, z=0.0, thickness=height):
+        solid = extrude(face.scale(scale).translate(Vector(0, 0, z)), amount=thickness)
+        solid.label, solid.color, solid.level = label, Color(*rgb), level
         return solid
 
-    solids = [
-        to_solid(face, f"background-{i}", bg_color)
-        for i, face in enumerate(cut(canvas, covered), 1)
-    ]
-    for rgb, faces in by_color.items():
-        for i, face in enumerate(merge_touching(faces), 1):
-            solids.append(to_solid(face, f"{to_hex(rgb)}-{i}", rgb))
+    solids = []
+    if mode == "puzzle":
+        for i, face in enumerate(background, 1):
+            solids.append(to_solid(face, f"background-{i}", bg_color, 0))
+        for rgb, faces in regions.items():
+            for i, face in enumerate(faces, 1):
+                solids.append(to_solid(face, f"{to_hex(rgb)}-{i}", rgb, 1))
+    else:
+        layers = sorted(regions.items(), key=lambda item: sum(f.area for f in item[1]),
+                        reverse=order == "large")
+        if bg_color:
+            layers.insert(0, (bg_color, background))
+        thicknesses = layer_thicknesses(len(layers), height, layer_thickness)
+        for level, (rgb, _) in enumerate(layers):
+            z = sum(thicknesses[:level])
+            footprint = [face for _, faces in layers[level:] for face in faces]
+            for i, face in enumerate(merge_touching(footprint), 1):
+                label = f"L{level + 1}-{to_hex(rgb)}-{i}"
+                solids.append(to_solid(face, label, rgb, level, z, thicknesses[level]))
 
-    # Place the slab's corner at the origin, sitting on the XY plane.
-    corner = Compound(solids).bounding_box().min
+    # Place the canvas corner at the origin, so pieces land in the same spot with or without the slab.
+    corner = Vector(vb.x, vb.y) * scale
     solids = [solid.translate(-corner) for solid in solids]
     return Compound(label=Path(svg_path).stem, children=solids), by_color
 
@@ -107,18 +209,27 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("svg", type=Path)
     parser.add_argument("--size", type=float, required=True,
-                        help="length of the longest side of the slab, in mm")
+                        help="length of the longest side of the SVG canvas, in mm")
     parser.add_argument("--height", type=float, required=True,
                         help="extrusion height (Z), in mm")
     parser.add_argument("--bg-color", default="#808080",
-                        help="color of the slab the shapes are cut from (default gray)")
+                        help='color of the slab the shapes are cut from (default gray), or "none" for no slab')
+    parser.add_argument("--min-area", type=float, default=0.5,
+                        help="merge regions smaller than this (mm²) into a neighbor (default 0.5)")
+    parser.add_argument("--mode", choices=["puzzle", "layers"], default="puzzle",
+                        help="puzzle: full-height pieces set into the slab; "
+                             "layers: one stacked layer per color")
+    parser.add_argument("--order", choices=["large", "small"], default="large",
+                        help="layers mode: stack colors largest-area or smallest-area first")
+    parser.add_argument("--layer-thickness", type=float,
+                        help="layers mode: fixed thickness per layer in mm (default: height / layers). "
+                             "Raises the total height if needed; otherwise the bottom layer takes the rest")
     parser.add_argument("-o", "--output", type=Path,
                         help="output STEP path (default: alongside the SVG)")
     args = parser.parse_args()
 
-    # build123d's automatic clean would also unify edges; see merge_touching.
-    with SkipClean():
-        model, by_color = build(args.svg, args.size, args.height, parse_hex(args.bg_color))
+    model, by_color = build(args.svg, args.size, args.height, parse_hex(args.bg_color),
+                            args.mode, args.order, args.min_area, args.layer_thickness)
     output = args.output or args.svg.with_suffix(".step")
     export_step(model, str(output))
 
