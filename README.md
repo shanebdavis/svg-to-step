@@ -71,3 +71,9 @@ Differences from the Python version:
 - Elliptical arcs and non-uniformly scaled circles become Bezier curves; circles, circular arcs and ellipses stay exact.
 
 `web/test/reference.json` holds svg2step.py results; regenerate it with `.venv/bin/python web/test/make_reference.py` after changing the Python version.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+The browser version bundles OpenCascade (via `replicad-opencascadejs`), which is licensed separately under the LGPL 2.1.

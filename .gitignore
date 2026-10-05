@@ -4,3 +4,5 @@ __pycache__/
 .gstack/
 node_modules/
 .claude/
+# Third-party artwork used for local testing only
+examples/psg.svg
