@@ -1,5 +1,7 @@
 # svg-to-step
 
+**Try it in your browser: https://shanebdavis.github.io/svg-to-step/** (no install; your SVGs never leave your machine)
+
 Turns an SVG into a flat, colored STEP model. Built for importing into Shapr3D and printing on a multi-material (tool-changer) printer.
 
 There are two modes:
@@ -50,7 +52,7 @@ It opens a local page at http://localhost:8765. Drop in an SVG, adjust size, hei
 
 ## Browser version (web/)
 
-A TypeScript rewrite that runs entirely in the browser: no server, no Python. The CAD engine is the same OpenCascade kernel, compiled to WebAssembly (a ~7 MB gzipped download, cached after the first visit). It builds to static files that any web host can serve.
+A TypeScript rewrite that runs entirely in the browser: no server, no Python. It's live at https://shanebdavis.github.io/svg-to-step/, redeployed by GitHub Actions on every push to `main` after the tests pass. The CAD engine is the same OpenCascade kernel, compiled to WebAssembly (a ~7 MB gzipped download, cached after the first visit). It builds to static files that any web host can serve.
 
 Double-click `Start SVG to STEP (Web).command`. It builds the app when the sources change (needs Node.js) and serves it at http://localhost:8775.
 
