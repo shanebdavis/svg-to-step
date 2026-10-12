@@ -40,10 +40,11 @@ self.onmessage = async ({ data }: MessageEvent<BuildRequest>) => {
       : 0;
     const result: BuildResult = {
       meshes,
+      palette: model.palette.map((p) => toHex(p.color)),
       step,
       stats: {
         solids: model.parts.length,
-        colors: model.colors,
+        colors: model.palette.length,
         size: [extent("X"), extent("Y"), extent("Z")],
         seconds: (performance.now() - started) / 1000,
       },

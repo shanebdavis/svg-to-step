@@ -22,6 +22,8 @@ CASES = [
     {"mode": "layers", "order": "small", "slab": False},
     {"mode": "layers", "order": "large", "slab": True, "layerThickness": 2.0},
     {"mode": "layers", "order": "large", "slab": False, "layerThickness": 1.0},
+    {"mode": "puzzle", "slab": True, "baseThickness": 2.0},
+    {"mode": "puzzle", "slab": False, "baseThickness": 1.5, "baseColor": "#123456"},
 ]
 SIZE, HEIGHT = 150.0, 6.0
 
@@ -47,6 +49,7 @@ def main():
             model, _ = build(
                 svg, SIZE, HEIGHT, parse_hex("#808080") if case["slab"] else None,
                 case["mode"], case.get("order", "large"), 0.5, case.get("layerThickness"),
+                case.get("baseThickness"), parse_hex(case.get("baseColor")),
             )
             results.setdefault(svg.name, []).append({"case": case, **summarize(model)})
             print(svg.name, case, len(model.children), "solids")

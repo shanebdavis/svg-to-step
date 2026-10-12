@@ -5,9 +5,16 @@ import opencascade from "replicad-opencascadejs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { build, DEFAULT_OPTIONS, type Model } from "../src/engine/build";
 import { boundingBox, isValid, setOC, volume } from "../src/engine/occt/kernel";
-import { toHex } from "../src/engine/svg/color";
+import { parseColor, toHex } from "../src/engine/svg/color";
 
-interface Case { mode: "puzzle" | "layers"; order?: "large" | "small"; slab: boolean; layerThickness?: number }
+interface Case {
+  mode: "puzzle" | "layers";
+  order?: "large" | "small";
+  slab: boolean;
+  layerThickness?: number;
+  baseThickness?: number;
+  baseColor?: string;
+}
 interface Summary { solids: number; volume: number; groups: Record<string, number>; volumes: number[]; size: number[] }
 interface Reference { size: number; height: number; results: Record<string, (Summary & { case: Case })[]> }
 
@@ -44,14 +51,17 @@ for (const [file, results] of Object.entries(reference.results)) {
   const path = new URL(`../../examples/${file}`, import.meta.url);
   describe.skipIf(!existsSync(path))(file, () => {
     for (const expected of results) {
-      const { mode, order = "large", slab, layerThickness = null } = expected.case;
-      it(`${mode} ${mode === "layers" ? order : ""} slab=${slab} layer=${layerThickness ?? "auto"}`, () => {
+      const { mode, order = "large", slab, layerThickness = null, baseThickness = null, baseColor } = expected.case;
+      const rgba = baseColor ? parseColor(baseColor) : null;
+      const name = mode === "layers" ? `layers ${order} layer=${layerThickness ?? "auto"}` : `puzzle base=${baseThickness ?? "none"}`;
+      it(`${name} slab=${slab}${baseColor ? ` ${baseColor}` : ""}`, () => {
         const model = build(readFileSync(path, "utf8"), {
           ...DEFAULT_OPTIONS,
           size: reference.size,
           height: reference.height,
           slabColor: slab ? DEFAULT_OPTIONS.slabColor : null,
-          mode, order, layerThickness,
+          mode, order, layerThickness, baseThickness,
+          baseColor: rgba && [rgba[0], rgba[1], rgba[2]],
         });
         const actual = summarize(model);
         expect(actual.valid).toBe(true);

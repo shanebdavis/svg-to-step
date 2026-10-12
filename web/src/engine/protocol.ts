@@ -18,6 +18,8 @@ export interface PartMesh {
 
 export interface BuildResult {
   meshes: PartMesh[];
+  /** Hex colors of the SVG, largest visible area first. */
+  palette: string[];
   step: Uint8Array;
   stats: { solids: number; colors: number; size: [number, number, number]; seconds: number };
 }

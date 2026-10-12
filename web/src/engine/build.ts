@@ -3,7 +3,7 @@
  *
  * Puzzle mode: the canvas becomes a slab with every painted shape cut out of
  * it, and each visible connected single-color region is a solid filling its
- * cutout exactly.
+ * cutout exactly. An optional single-color base sits under the puzzle.
  *
  * Layers mode: one layer per color, stacked by area. Each layer covers its own
  * color plus every color above it, so each color shows from the top at its
@@ -18,7 +18,7 @@ import { parseSvg } from "./svg/parseSvg";
 import type { Point } from "./svg/geometry";
 import {
   area, boundingBox, common, cut, distanceToPoint, edgeLength, edgeSamples, edgesOf, extrude,
-  facesFromContours, facesOf, fuse, rectangleFace, repairFace, unifyFaces, type Box,
+  facesFromContours, facesOf, fuse, rectangleFace, repairFace, unifyFaces, withoutHoles, type Box,
 } from "./occt/kernel";
 
 export interface BuildOptions {
@@ -33,13 +33,20 @@ export interface BuildOptions {
   order: "large" | "small";
   /** Layers mode: fixed thickness, or null to split the height evenly. */
   layerThickness: number | null;
+  /**
+   * Puzzle mode: thickness of a solid base under the puzzle, or null for no base.
+   * The base covers the canvas, or without a slab, the outline of the art with holes filled.
+   */
+  baseThickness: number | null;
+  /** Base color, or null for the color covering the most area. */
+  baseColor: RGB | null;
   /** Regions under this area (mm²) merge into a neighbor. */
   minArea: number;
 }
 
 export const DEFAULT_OPTIONS: BuildOptions = {
   size: 150, height: 5, slabColor: [128 / 255, 128 / 255, 128 / 255],
-  mode: "puzzle", order: "large", layerThickness: null, minArea: 0.5,
+  mode: "puzzle", order: "large", layerThickness: null, baseThickness: null, baseColor: null, minArea: 0.5,
 };
 
 export interface Part {
@@ -52,7 +59,8 @@ export interface Part {
 
 export interface Model {
   parts: Part[];
-  colors: number;
+  /** Each SVG color and its visible area (mm²), largest first. */
+  palette: { color: RGB; area: number }[];
   width: number;
   height: number;
 }
@@ -77,8 +85,11 @@ function visibleRegions(painted: { face: TopoDS_Face; key: Key }[], canvas: Topo
 
 /** Fuse same-color fragments, then split into connected regions. */
 function mergeTouching(faces: TopoDS_Face[]): TopoDS_Face[] {
-  return faces.length === 1 ? faces : facesOf(unifyFaces(fuse(faces)));
+  return faces.length <= 1 ? faces : facesOf(unifyFaces(fuse(faces)));
 }
+
+/** Outer boundary of faces: their union with holes filled, so islands inside a hole merge too. */
+const outline = (faces: TopoDS_Face[]) => mergeTouching(mergeTouching(faces).map(withoutHoles));
 
 function overlaps(a: Box, b: Box, tolerance: number): boolean {
   return !(b.minX > a.maxX + tolerance || b.maxX < a.minX - tolerance ||
@@ -159,19 +170,34 @@ export function build(svgText: string, options: BuildOptions): Model {
   regions = absorbSlivers(regions, options.minArea, Math.max(svg.width, svg.height) * 1e-6);
   const background = regions.get(BACKGROUND) ?? [];
   regions.delete(BACKGROUND);
+  const totalArea = (faces: TopoDS_Face[]) => faces.reduce((sum, f) => sum + area(f), 0);
+  const palette = [...regions]
+    .map(([key, faces]) => ({ color: colorOf.get(key)!, area: totalArea(faces) }))
+    .sort((a, b) => b.area - a.area);
 
   const parts: Part[] = [];
   if (options.mode === "puzzle") {
+    let z = 0;
+    let level = 0;
+    const { baseThickness } = options;
+    if (baseThickness) {
+      const color = options.baseColor ?? palette[0]?.color ?? options.slabColor ?? DEFAULT_OPTIONS.slabColor!;
+      const footprint = options.slabColor ? [canvas] : outline([...regions.values()].flat());
+      footprint.forEach((face, i) => parts.push({
+        solid: extrude(face, 0, baseThickness), label: `base-${i + 1}`, color, level: 0,
+      }));
+      z = baseThickness;
+      level = 1;
+    }
     background.forEach((face, i) => parts.push({
-      solid: extrude(face, 0, options.height), label: `background-${i + 1}`, color: options.slabColor!, level: 0,
+      solid: extrude(face, z, options.height), label: `background-${i + 1}`, color: options.slabColor!, level,
     }));
     for (const [key, faces] of regions) {
       faces.forEach((face, i) => parts.push({
-        solid: extrude(face, 0, options.height), label: `${key}-${i + 1}`, color: colorOf.get(key)!, level: 1,
+        solid: extrude(face, z, options.height), label: `${key}-${i + 1}`, color: colorOf.get(key)!, level: level + 1,
       }));
     }
   } else {
-    const totalArea = (faces: TopoDS_Face[]) => faces.reduce((sum, f) => sum + area(f), 0);
     const layers = [...regions]
       .map(([key, faces]) => ({ key, color: colorOf.get(key)!, faces, area: totalArea(faces) }))
       .sort((a, b) => (options.order === "large" ? b.area - a.area : a.area - b.area));
@@ -188,5 +214,5 @@ export function build(svgText: string, options: BuildOptions): Model {
       }));
     });
   }
-  return { parts, colors: byColor.size, width: svg.width, height: svg.height };
+  return { parts, palette, width: svg.width, height: svg.height };
 }
