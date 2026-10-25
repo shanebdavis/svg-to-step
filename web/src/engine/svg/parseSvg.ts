@@ -7,7 +7,7 @@
  * style, <style> rules (type, class, id, descendant and child selectors),
  * inherited fill, fill-rule, stroke (width, caps, joins), opacity,
  * currentColor, display and visibility. A stroke becomes a filled outline
- * painted over its element's fill. Gradients use their first stop color.
+ * painted over its element's fill, at least minStroke wide. Gradients use their first stop color.
  * Dashes, text, images, clipping and masks are ignored.
  */
 
@@ -190,7 +190,8 @@ function href(element: Element): string | null {
   return value?.startsWith("#") ? value.slice(1) : null;
 }
 
-export function parseSvg(text: string, size: number): ParsedSvg {
+/** minStroke (mm) is the narrowest a stroke may be; thinner ones widen to it. */
+export function parseSvg(text: string, size: number, minStroke = 0): ParsedSvg {
   const doc = new DOMParser().parseFromString(text, "image/svg+xml");
   const root = doc.documentElement as unknown as Element | null;
   if (!root || root.localName !== "svg") throw new Error("Not an SVG document");
@@ -327,7 +328,7 @@ export function parseSvg(text: string, size: number): ParsedSvg {
     if (stroke && contours.length) {
       // Widths scale by the transform's area scale: exact for uniform scaling, an average otherwise.
       const width = stroke.width * Math.sqrt(Math.abs(placed[0] * placed[3] - placed[1] * placed[2]));
-      contours = strokeOutline(contours, { ...stroke, width });
+      contours = strokeOutline(contours, { ...stroke, width: Math.max(width, minStroke) });
     } else contours = contours.filter((c) => c.kind !== "path" || Math.abs(polygonArea(flatten(c, 4))) > 1e-9);
     const label = (element.getAttribute("id") ?? element.localName) + (stroke ? " stroke" : "");
     if (contours.length) shapes.push({ contours, color, fillRule, label });

@@ -11,24 +11,18 @@
  *
  * Either way, overlaps resolve by paint order, so the top view matches the SVG,
  * and the finished footprint's longest side is exactly the requested size.
- * An optional color limit merges the most alike colors first. Brush strokes
- * can delete whole shapes, and a minimum feature size merges, thickens or
- * keeps parts too thin to print (see features.ts).
+ * An optional color limit merges the most alike colors first.
  */
 
 import type { TopoDS_Edge, TopoDS_Face, TopoDS_Shape, TopoDS_Solid } from "replicad-opencascadejs";
 import { toHex, type RGB } from "./svg/color";
 import { parseSvg } from "./svg/parseSvg";
-import { areaPathsD, FillRule as Fill, getBoundsPathsD, intersectD, simplifyPathsD, unionD } from "clipper2-ts";
+import { areaPathsD, FillRule as Fill, getBoundsPathsD, intersectD, unionD, type PathsD } from "clipper2-ts";
 import { flatten, type Point } from "./svg/geometry";
 import type { ParsedSvg } from "./svg/parseSvg";
 import {
-  coveredBy, fromPaths, paintMasks, planFeatures, toPaths, type FeatureMode, type Masks, type Stroke,
-} from "./features";
-import {
-  area, boundingBox, common, cut, distanceToPoint, edgeLength, edgeSamples, edgesOf, extrude, faceFromWires, faceOutlines,
+  area, boundingBox, common, cut, distanceToPoint, edgeLength, edgeSamples, edgesOf, extrude, faceFromWires,
   facesFromContours, facesOf, fuse, mesh, rectangleFace, repairFace, scale, unifyFaces, wireFromContour, withoutHoles, type Box,
-  type FillRule,
 } from "./occt/kernel";
 import { reduceColors } from "./reduceColors";
 import { wrapContour, type WrapShape } from "./wrap";
@@ -61,14 +55,8 @@ export interface BuildOptions {
   baseColor: RGB | null;
   /** Most colors to keep from the SVG, or null for all. */
   maxColors: number | null;
-  /** Narrowest printable width, mm, or 0 to leave thin parts alone. */
-  minFeature: number;
-  /** What happens to too-thin parts where no brush says otherwise. */
-  featureMode: FeatureMode;
-  /** Brush strokes, oldest first, in mm on the SVG canvas scaled to size (before any fitting). */
-  strokes: Stroke[];
-  /** Indices of SVG shapes to leave out, besides those a delete stroke covers. */
-  deletedShapes: number[];
+  /** Strokes narrower than this (mm) widen to it; 0 leaves them as drawn. */
+  minStroke: number;
   /** Regions under this area (mm²) merge into a neighbor. */
   minArea: number;
 }
@@ -78,7 +66,7 @@ const GRAY: RGB = [128 / 255, 128 / 255, 128 / 255];
 export const DEFAULT_OPTIONS: BuildOptions = {
   size: 100, height: 5, slabColor: GRAY, slabShape: "canvas", slabPadding: 5,
   mode: "puzzle", order: "large", layerThickness: null, baseThickness: null, baseColor: null, maxColors: null,
-  minFeature: 0, featureMode: "merge", strokes: [], deletedShapes: [], minArea: 0.5,
+  minStroke: 0, minArea: 0.5,
 };
 
 export interface Part {
@@ -95,13 +83,7 @@ export interface Model {
   palette: { color: RGB; area: number }[];
   /** Distinct visible colors in the SVG, before any color limit. */
   svgColors: number;
-  /** Every SVG shape's outline and color, in paint order. */
-  shapes: { color: RGB; fillRule: FillRule; polygons: Point[][] }[];
-  /** Indices of the shapes left out. */
-  deleted: number[];
-  /** Thin parts merged away or thickened. */
-  changes: { mode: "merge" | "thicken"; polygons: Point[][] }[];
-  /** How much the SVG was scaled to fit size: shapes and changes are in fitted mm, strokes are not. */
+  /** How much the SVG was scaled to fit size. */
   fit: number;
   width: number;
   height: number;
@@ -238,33 +220,6 @@ function slabFace(options: BuildOptions, canvas: TopoDS_Face, covered: TopoDS_Sh
   return { slab: faceFromWires(wire, []), art };
 }
 
-const polygonFaces = (polygons: Point[][]) => facesFromContours(polygons.map((corners) => ({
-  kind: "path" as const,
-  segments: corners.map((from, i) => ({ kind: "line" as const, from, to: corners[(i + 1) % corners.length] })),
-})), "evenodd");
-
-/** Apply planFeatures: each claim is cut from every region, then joins its own color (or none). */
-function fixThinFeatures(regions: Map<Key, TopoDS_Face[]>, options: BuildOptions, masks: Masks, bounds: TopoDS_Face[] | null) {
-  const tolerance = options.minFeature * 0.01;
-  const outlines = (faces: TopoDS_Face[]) => toPaths(faces.flatMap((face) => faceOutlines(face, tolerance)));
-  const polygons = new Map([...regions].map(([key, faces]) => [key, outlines(faces)]));
-  const plan = planFeatures(polygons, options.minFeature, options.featureMode, masks, bounds && outlines(bounds));
-  const changes = plan.changes.map(({ mode, paths }) => ({ mode, polygons: fromPaths(paths) }));
-  if (!plan.claims.length) return { regions, changes };
-  // Every polygon vertex becomes an OpenCascade edge; dropping those that move the outline
-  // under 0.5% of the minimum width keeps the booleans fast.
-  const claims = plan.claims.map(({ key, paths }) =>
-    ({ key, faces: polygonFaces(fromPaths(simplifyPathsD(paths, options.minFeature / 200))) }));
-  const tool = fuse(claims.flatMap((c) => c.faces));
-  const fixed = new Map<Key, TopoDS_Face[]>();
-  for (const [key, faces] of regions) {
-    const kept = faces.length ? facesOf(cut(fuse(faces), tool)) : [];
-    const gained = claims.filter((c) => c.key === key).flatMap((c) => c.faces);
-    fixed.set(key, mergeTouching([...kept, ...gained]));
-  }
-  return { regions: fixed, changes };
-}
-
 /**
  * How much to scale the SVG so the footprint's longest side is size: 1 for a
  * canvas slab, else from the visible art's extent. A wrapped slab's extent is
@@ -296,21 +251,15 @@ function fitScale(svg: ParsedSvg, kept: Point[][][], options: BuildOptions): num
   }));
 }
 
-const scaleStroke = (stroke: Stroke, k: number): Stroke =>
-  ({ ...stroke, radius: stroke.radius * k, points: stroke.points.map(([x, y]) => [x * k, y * k]) });
+const toPaths = (polygons: Point[][]): PathsD => polygons.map((p) => p.map(([x, y]) => ({ x, y })));
 
 export function build(svgText: string, options: BuildOptions): Model {
-  const nominal = parseSvg(svgText, options.size);
-  const outlines = (svg: ParsedSvg) => svg.shapes.map((shape) => shape.contours.map((c) => flatten(c, 16)));
-  const nominalMasks = paintMasks(options.strokes);
-  const deleted = outlines(nominal).flatMap((polygons, i) =>
-    options.deletedShapes.includes(i) || (nominalMasks.delete.length > 0 && coveredBy(toPaths(polygons), nominalMasks.delete)) ? [i] : []);
-  let fit = fitScale(nominal, outlines(nominal).filter((_, i) => !deleted.includes(i)), options);
-  const svg = fit === 1 ? nominal : parseSvg(svgText, options.size * fit);
-  const masks = fit === 1 ? nominalMasks : paintMasks(options.strokes.map((s) => scaleStroke(s, fit)));
-  let shapes = svg.shapes.map((shape, i) => ({ color: shape.color, fillRule: shape.fillRule, polygons: outlines(svg)[i] }));
+  const parse = (size: number) => parseSvg(svgText, size, options.minStroke);
+  const nominal = parse(options.size);
+  let fit = fitScale(nominal, nominal.shapes.map((shape) => shape.contours.map((c) => flatten(c, 16))), options);
+  const svg = fit === 1 ? nominal : parse(options.size * fit);
   const colorOf = new Map<Key, RGB>();
-  const painted = svg.shapes.filter((_, i) => !deleted.includes(i)).flatMap((shape) => {
+  const painted = svg.shapes.flatMap((shape) => {
     const key = toHex(shape.color);
     colorOf.set(key, shape.color);
     return facesFromContours(shape.contours, shape.fillRule).flatMap(repairFace).map((face) => ({ face, key }));
@@ -323,10 +272,6 @@ export function build(svgText: string, options: BuildOptions): Model {
   const { slab: slabOutline, art } = slabFace(options, canvas, covered);
   let slab = slabOutline;
   if (options.slabColor) regions.set(BACKGROUND, art ? facesOf(cut(slab, art)) : [slab]);
-  let changes: Model["changes"] = [];
-  if (options.minFeature > 0) {
-    ({ regions, changes } = fixThinFeatures(regions, options, masks, options.slabColor ? [slab] : null));
-  }
   regions = absorbSlivers(regions, options.minArea, Math.max(svg.width, svg.height) * 1e-6);
   const background = regions.get(BACKGROUND) ?? [];
   regions.delete(BACKGROUND);
@@ -347,9 +292,6 @@ export function build(svgText: string, options: BuildOptions): Model {
       for (const [key, faces] of regions) regions.set(key, rescale(faces));
       background.splice(0, background.length, ...rescale(background));
       slab = facesOf(scale(slab, factor))[0];
-      const grow = (polygons: Point[][]) => polygons.map((p) => p.map(([x, y]): Point => [x * factor, y * factor]));
-      shapes = shapes.map((shape) => ({ ...shape, polygons: grow(shape.polygons) }));
-      changes = changes.map((change) => ({ ...change, polygons: grow(change.polygons) }));
       fit *= factor;
     }
   }
@@ -392,5 +334,5 @@ export function build(svgText: string, options: BuildOptions): Model {
       }));
     });
   }
-  return { parts, palette, svgColors: byColor.size, shapes, deleted, changes, fit, width: svg.width, height: svg.height };
+  return { parts, palette, svgColors: byColor.size, fit, width: svg.width, height: svg.height };
 }

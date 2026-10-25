@@ -317,44 +317,6 @@ export function mesh(shape: TopoDS_Shape, tolerance: number, angularTolerance: n
   return { positions, indices };
 }
 
-/**
- * Boundary loops of a planar face as polygons, curves within tolerance: the
- * mesh edges no two triangles share. Triangles wind counterclockwise about +Z,
- * so outer loops come out counterclockwise and holes clockwise.
- */
-export function faceOutlines(face: TopoDS_Face, tolerance: number): Point[][] {
-  const { positions, indices } = mesh(face, tolerance, 0.1);
-  // Weld by position, in case the mesh repeats a vertex.
-  const ids = new Map<string, number>();
-  const id = (i: number) => {
-    const key = `${positions[3 * i].toFixed(6)},${positions[3 * i + 1].toFixed(6)}`;
-    if (!ids.has(key)) ids.set(key, i);
-    return ids.get(key)!;
-  };
-  const edges = new Map<string, [number, number]>();
-  for (let t = 0; t < indices.length; t += 3) {
-    for (let k = 0; k < 3; k++) {
-      const [a, b] = [id(indices[t + k]), id(indices[t + ((k + 1) % 3)])];
-      if (a === b) continue;
-      if (!edges.delete(`${b}>${a}`)) edges.set(`${a}>${b}`, [a, b]);
-    }
-  }
-  const next = new Map([...edges.values()].map(([a, b]) => [a, b]));
-  const loops: Point[][] = [];
-  for (const start of next.keys()) {
-    if (!next.has(start)) continue;
-    const loop: Point[] = [];
-    for (let v: number | undefined = start; v !== undefined && next.has(v);) {
-      loop.push([positions[3 * v], positions[3 * v + 1]]);
-      const after: number | undefined = next.get(v);
-      next.delete(v);
-      v = after;
-    }
-    if (loop.length >= 3) loops.push(loop);
-  }
-  return loops;
-}
-
 export interface StepPart { shape: TopoDS_Shape; name: string; color: readonly [number, number, number] }
 
 /** OpenCascade colors are linear; STEP files (and SVG) carry sRGB. */

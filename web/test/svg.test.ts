@@ -124,6 +124,13 @@ describe("documents", () => {
       expect(Math.abs(area(round.shapes[0]))).toBeCloseTo(80 * 4 + Math.PI * 4, 1);
     });
 
+    it("widens strokes thinner than the minimum, leaving wider ones alone", () => {
+      const doc = svg('<path d="M10 30 H90" stroke="#000" stroke-width="0.2"/><path d="M10 70 H90" stroke="#000" stroke-width="3"/>');
+      const [thin, wide] = parseSvg(doc, 100, 1).shapes.map((shape) => Math.abs(area(shape)));
+      expect(thin).toBeCloseTo(80 * 1, 3);
+      expect(wide).toBeCloseTo(80 * 3, 3);
+    });
+
     it("scales stroke width with the transform and the canvas", () => {
       const parsed = parseSvg(svg('<g transform="scale(2)"><line x1="5" y1="25" x2="45" y2="25" stroke="#000"/></g>'), 200);
       // 80 user units long and 2 wide after the transform; the canvas doubles both.
