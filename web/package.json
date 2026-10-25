@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",
+    "fflate": "^0.8.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "replicad-opencascadejs": "^1.1.0",

@@ -129,7 +129,7 @@ export function Viewer({ meshes, explode, frameKey }: Props) {
 
   return (
     <div className="viewer" ref={container}>
-      {unavailable && <div className="hint">3D preview unavailable: this browser has WebGL turned off.<br />Conversion and STEP download still work.</div>}
+      {unavailable && <div className="hint">3D preview unavailable: this browser has WebGL turned off.<br />Conversion and downloads still work.</div>}
     </div>
   );
 }
