@@ -54,26 +54,34 @@ describe("puzzle with a wrapped slab", () => {
     setOC(await opencascade({ print: () => {}, printErr: () => {} }));
   });
 
-  it.each(["square", "circle", "hexagon"] as const)("%s: pieces fill the slab outline exactly", (slabShape) => {
-    const options = { ...DEFAULT_OPTIONS, slabShape, slabPadding: 3 };
-    const model = build(svg, options);
-    const art = build(svg, { ...options, slabColor: null });
+  it.each(["square", "circle", "hexagon"] as const)("%s: fits size exactly, with the art padded inside", (slabShape) => {
+    const model = build(svg, { ...DEFAULT_OPTIONS, slabShape, slabPadding: 3 });
     for (const part of model.parts) expect(isValid(part.solid), part.label).toBe(true);
+    const span = (parts: typeof model.parts) => {
+      const boxes = parts.map((p) => boundingBox(p.solid));
+      return {
+        minX: Math.min(...boxes.map((b) => b.minX)), maxX: Math.max(...boxes.map((b) => b.maxX)),
+        minY: Math.min(...boxes.map((b) => b.minY)), maxY: Math.max(...boxes.map((b) => b.maxY)),
+      };
+    };
+    const slab = span(model.parts);
+    const art = span(model.parts.filter((p) => !p.label.startsWith("background")));
+    const [width, height] = [slab.maxX - slab.minX, slab.maxY - slab.minY];
+    expect(Math.max(width, height)).toBeCloseTo(DEFAULT_OPTIONS.size, 6);
+    expect(Math.min(width, height)).toBeLessThanOrEqual(DEFAULT_OPTIONS.size + 1e-6);
+    // Padding stays true millimeters: only the art scales to fit.
+    expect(art.minX - slab.minX).toBeGreaterThan(2.9);
+    expect(slab.maxX - art.maxX).toBeGreaterThan(2.9);
+    expect(art.minY - slab.minY).toBeGreaterThan(2.9);
+    expect(slab.maxY - art.maxY).toBeGreaterThan(2.9);
+  });
 
-    const background = model.parts.filter((p) => p.label.startsWith("background"));
-    expect(background.length).toBeGreaterThan(0);
+  it("fits the art itself to size without a slab", () => {
+    const model = build(svg, { ...DEFAULT_OPTIONS, slabColor: null });
     const boxes = model.parts.map((p) => boundingBox(p.solid));
-    const total = model.parts.reduce((sum, p) => sum + volume(p.solid), 0);
-    const artVolume = art.parts.reduce((sum, p) => sum + volume(p.solid), 0);
-    expect(total).toBeGreaterThan(artVolume);
-
-    const xs = [Math.min(...boxes.map((b) => b.minX)), Math.max(...boxes.map((b) => b.maxX))];
-    const ys = [Math.min(...boxes.map((b) => b.minY)), Math.max(...boxes.map((b) => b.maxY))];
-    const artBoxes = art.parts.map((p) => boundingBox(p.solid));
-    expect(xs[0]).toBeLessThan(Math.min(...artBoxes.map((b) => b.minX)) - 2.9);
-    expect(xs[1]).toBeGreaterThan(Math.max(...artBoxes.map((b) => b.maxX)) + 2.9);
-    expect(ys[0]).toBeLessThan(Math.min(...artBoxes.map((b) => b.minY)) - 2.9);
-    expect(ys[1]).toBeGreaterThan(Math.max(...artBoxes.map((b) => b.maxY)) + 2.9);
+    const width = Math.max(...boxes.map((b) => b.maxX)) - Math.min(...boxes.map((b) => b.minX));
+    const height = Math.max(...boxes.map((b) => b.maxY)) - Math.min(...boxes.map((b) => b.minY));
+    expect(Math.max(width, height)).toBeCloseTo(DEFAULT_OPTIONS.size, 6);
   });
 
   it("circle slab volume is the padded enclosing circle times the height", () => {

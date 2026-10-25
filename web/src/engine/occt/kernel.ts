@@ -70,9 +70,14 @@ export function edgeLength(edge: TopoDS_Edge): number {
   return mass;
 }
 
-export function boundingBox(shape: TopoDS_Shape): Box {
+/**
+ * Axis-aligned bounds. The quick box can overshoot curved edges (it bounds
+ * Bezier control points); exact follows the curves, at some cost.
+ */
+export function boundingBox(shape: TopoDS_Shape, exact = false): Box {
   const box = new oc.Bnd_Box();
-  oc.BRepBndLib.Add(shape, box, false);
+  if (exact) oc.BRepBndLib.AddOptimal(shape, box, false, false);
+  else oc.BRepBndLib.Add(shape, box, false);
   const result = {
     minX: box.GetXMin(), minY: box.GetYMin(), minZ: box.GetZMin(),
     maxX: box.GetXMax(), maxY: box.GetYMax(), maxZ: box.GetZMax(),
@@ -155,6 +160,13 @@ export function edgeSamples(edge: TopoDS_Edge, count: number): Point[] {
 export function translate(shape: TopoDS_Shape, dx: number, dy: number, dz: number): TopoDS_Shape {
   const trsf = new oc.gp_Trsf();
   trsf.SetTranslation(new oc.gp_Vec(dx, dy, dz));
+  return new oc.BRepBuilderAPI_Transform(shape, trsf, false, false).Shape();
+}
+
+/** Uniform scale about the origin. */
+export function scale(shape: TopoDS_Shape, factor: number): TopoDS_Shape {
+  const trsf = new oc.gp_Trsf();
+  trsf.SetScale(pnt(0, 0), factor);
   return new oc.BRepBuilderAPI_Transform(shape, trsf, false, false).Shape();
 }
 

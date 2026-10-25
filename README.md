@@ -74,9 +74,11 @@ Differences from the Python version:
 
 - `fill-rule` is honored: `nonzero` paths fill overlapping and self-intersecting areas the way browsers do.
 - Elliptical arcs and non-uniformly scaled circles become Bezier curves; circles, circular arcs and ellipses stay exact.
-- The slab can be the canvas or a square, circle or hexagon: the smallest one around the visible art, grown by a padding in mm.
+- Strokes count: each becomes a filled outline (width, caps and joins; dashes ignored) painted over its element's fill. Min stroke (mm) widens any thinner stroke so fine line work prints.
+- Size is the longest side of the finished footprint: the slab, or without one, the art. The art scales to fit, so padding and minimum stroke width stay true millimeters.
+- The slab can be the canvas or a square, circle or hexagon: the smallest one around the visible art, grown by a padding in mm. Its color, shared with the base, is one of the SVG's colors, by default the one with the most area.
 - Download 3MF saves a Bambu Studio file: one object with a part per color, each on its own filament, with the colors stored for Bambu Studio to map onto your filaments.
-- A Colors slider merges the SVG's colors down to as few as two. It merges the pair that looks most alike first (distance in OKLab, a perceptually uniform color space), with no dithering. A merged color is the area-weighted average of its members.
+- A Colors slider merges the SVG's colors down to as few as two. It merges the pair that looks most alike first (distance in OKLab, a perceptually uniform color space), with no dithering: the color with less area takes the other's color, so no new colors appear.
 - The last SVG is remembered along with the settings, so a reload picks up where you left off.
 
 `web/test/reference.json` holds svg2step.py results; regenerate it with `.venv/bin/python web/test/make_reference.py` after changing the Python version.

@@ -24,9 +24,10 @@ beforeAll(async () => {
   setOC(await opencascade({ print: () => {}, printErr: () => {} }));
 });
 
+/** Python sizes the canvas, not the footprint; undo the fit so the two compare directly. */
 function summarize(model: Model): Summary & { valid: boolean } {
   const groups: Record<string, number> = {};
-  const volumes = model.parts.map((p) => volume(p.solid));
+  const volumes = model.parts.map((p) => volume(p.solid) / model.fit ** 2);
   model.parts.forEach((p, i) => {
     const key = `${toHex(p.color)}@${p.level}`;
     groups[key] = (groups[key] ?? 0) + volumes[i];
@@ -39,7 +40,7 @@ function summarize(model: Model): Summary & { valid: boolean } {
     volume: volumes.reduce((a, b) => a + b, 0),
     groups,
     volumes: [...volumes].sort((a, b) => a - b),
-    size: [extent("X"), extent("Y"), extent("Z")],
+    size: [extent("X") / model.fit, extent("Y") / model.fit, extent("Z")],
     valid: model.parts.every((p) => isValid(p.solid)),
   };
 }

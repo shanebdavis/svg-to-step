@@ -14,18 +14,17 @@ const DEFAULT_SETTINGS = {
   size: 100,
   height: 5,
   slab: true,
-  slabColor: "#808080",
   slabShape: "canvas" as BuildOptions["slabShape"],
   slabPadding: 5,
   base: false,
   baseThickness: 2,
   explode: 0,
+  minStroke: 0,
 };
+
 
 type Settings = typeof DEFAULT_SETTINGS;
 type Status = { kind: "idle" | "working" | "ready" | "error"; message: string };
-
-const SLAB = "slab";
 
 const toRgb = (hex: string): RGB | null => {
   const rgba = parseColor(hex);
@@ -33,14 +32,14 @@ const toRgb = (hex: string): RGB | null => {
 };
 
 /**
- * baseColor is a hex color, SLAB for the slab's color, or null for the color with the most area.
+ * color is the slab and base color, from the SVG's palette, or null for the color with the most area.
  * maxColors limits the SVG's colors, or null keeps them all.
  */
-function toOptions(s: Settings, baseColor: string | null, maxColors: number | null): BuildOptions | null {
+function toOptions(s: Settings, color: string | null, maxColors: number | null): BuildOptions | null {
   const layerThickness = s.layerThickness.trim() === "" ? null : Number(s.layerThickness);
   const baseThickness = s.mode === "puzzle" && s.base ? s.baseThickness : null;
   const positive = [s.size, s.height, layerThickness ?? 1, baseThickness ?? 1];
-  if (!positive.every((v) => v > 0) || !(s.slabPadding >= 0)) return null;
+  if (!positive.every((v) => v > 0) || !(s.slabPadding >= 0) || !(s.minStroke >= 0)) return null;
   return {
     ...DEFAULT_OPTIONS,
     mode: s.mode,
@@ -48,12 +47,13 @@ function toOptions(s: Settings, baseColor: string | null, maxColors: number | nu
     size: s.size,
     height: s.height,
     layerThickness,
-    slabColor: s.slab ? toRgb(s.slabColor) : null,
+    slabColor: s.slab ? (color ? toRgb(color) : null) ?? "auto" : null,
     slabShape: s.slabShape,
     slabPadding: s.slabPadding,
     baseThickness,
-    baseColor: baseColor ? toRgb(baseColor === SLAB ? s.slabColor : baseColor) : null,
+    baseColor: color ? toRgb(color) : null,
     maxColors,
+    minStroke: s.minStroke,
   };
 }
 
@@ -80,14 +80,13 @@ export function App() {
   }, []);
 
   const { explode, ...buildSettings } = settings;
-  const baseColor = chosenBase === SLAB && !settings.slab ? null : chosenBase;
-  const options = toOptions(settings, baseColor, colorLimit);
+  const options = toOptions(settings, chosenBase, colorLimit);
   const optionsKey = JSON.stringify(options);
 
   useEffect(() => {
     if (!file) return;
     if (!options) {
-      setStatus({ kind: "error", message: "Size, height and thicknesses must be positive numbers, padding zero or more." });
+      setStatus({ kind: "error", message: "Size, height and thicknesses must be positive numbers; padding and min stroke zero or more." });
       return;
     }
     let cancelled = false;
@@ -100,7 +99,8 @@ export function App() {
           const { solids, colors, size, seconds } = built.stats;
           setStatus({
             kind: "ready",
-            message: `${solids} solids, ${colors} colors\n${size.map((v) => v.toFixed(2)).join(" × ")} mm\nbuilt in ${seconds.toFixed(1)} s`,
+            message: `${solids} solids, ${colors} colors\n${size.map((v) => v.toFixed(2)).join(" × ")} mm\n`
+              + `built in ${seconds.toFixed(1)} s`,
           });
         },
         (error) => {
@@ -116,9 +116,9 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file, optionsKey]);
 
-  // A color limit can merge away the chosen base color.
+  // A color limit can merge away the chosen color.
   useEffect(() => {
-    if (result && chosenBase && chosenBase !== SLAB && !result.palette.includes(chosenBase)) setChosenBase(null);
+    if (result && chosenBase && !result.palette.includes(chosenBase)) setChosenBase(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
 
@@ -156,8 +156,7 @@ export function App() {
   const layers = buildSettings.mode === "layers";
   const base = !layers && settings.base;
   const palette = result?.palette ?? [];
-  const swatches = settings.slab && !palette.includes(settings.slabColor) ? [...palette, SLAB] : palette;
-  const selectedBase = baseColor ?? palette[0];
+  const selectedBase = chosenBase ?? palette[0];
   return (
     <div className="app">
       <aside>
@@ -175,6 +174,11 @@ export function App() {
               onChange={(e) => setColorLimit(e.target.valueAsNumber >= result.svgColors ? null : e.target.valueAsNumber)} />
           </label>
         )}
+        <label>
+          Min stroke<span>mm; widens thinner lines, 0 is off</span>
+          <input type="number" min="0" step="0.1" value={settings.minStroke}
+            onChange={(e) => update("minStroke", e.target.valueAsNumber)} />
+        </label>
         <div className="row">
           <label>
             Mode
@@ -211,8 +215,6 @@ export function App() {
             <input type="checkbox" checked={settings.slab} onChange={(e) => update("slab", e.target.checked)} />
             Slab
           </label>
-          <input type="color" title="Slab color" disabled={!settings.slab} value={settings.slabColor}
-            onChange={(e) => update("slabColor", e.target.value)} />
         </div>
         <div className="row">
           <label>
@@ -240,19 +242,15 @@ export function App() {
             value={settings.baseThickness} onChange={(e) => update("baseThickness", e.target.valueAsNumber)} />
           <span className="unit">mm</span>
         </div>
-        {base && swatches.length > 0 && (
+        {(settings.slab || base) && palette.length > 0 && (
           <div className="field">
-            Base color<span>defaults to the color with the most area</span>
+            Base color<span>slab and base; defaults to the color with the most area</span>
             <div className="swatches" role="radiogroup" aria-label="Base color">
-              {swatches.map((swatch) => {
-                const hex = swatch === SLAB ? settings.slabColor : swatch;
-                const note = swatch === SLAB ? " (slab)" : swatch === palette[0] ? " (most area)" : "";
-                return (
-                  <button key={swatch} type="button" role="radio" aria-checked={swatch === selectedBase}
-                    className="swatch" style={{ background: hex }} title={hex + note}
-                    onClick={() => setChosenBase(swatch === palette[0] ? null : swatch)} />
-                );
-              })}
+              {palette.map((swatch) => (
+                <button key={swatch} type="button" role="radio" aria-checked={swatch === selectedBase}
+                  className="swatch" style={{ background: swatch }} title={swatch + (swatch === palette[0] ? " (most area)" : "")}
+                  onClick={() => setChosenBase(swatch === palette[0] ? null : swatch)} />
+              ))}
             </div>
           </div>
         )}

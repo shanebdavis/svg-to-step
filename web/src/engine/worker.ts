@@ -34,7 +34,7 @@ self.onmessage = async ({ data }: MessageEvent<BuildRequest>) => {
       ...mesh(part.solid, 0.05, 0.3),
     }));
     const step = exportStep(model.parts.map((p) => ({ shape: p.solid, name: p.label, color: p.color })));
-    const boxes = model.parts.map((p) => boundingBox(p.solid));
+    const boxes = model.parts.map((p) => boundingBox(p.solid, true));
     const extent = (k: "X" | "Y" | "Z") => boxes.length
       ? Math.max(...boxes.map((b) => b[`max${k}`])) - Math.min(...boxes.map((b) => b[`min${k}`]))
       : 0;

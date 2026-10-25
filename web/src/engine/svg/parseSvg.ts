@@ -3,15 +3,18 @@
  * millimeters: Y up, canvas corner at the origin, longest side = size.
  *
  * Supported: path, rect (incl. rounded), circle, ellipse, polygon, polyline,
- * groups, nested svg, use, transforms, presentation attributes, inline style,
- * <style> rules (type, class, id, descendant and child selectors), inherited
- * fill, fill-rule, opacity, currentColor, display and visibility. Gradients use their
- * first stop color. Strokes, text, images, clipping and masks are ignored.
+ * line, groups, nested svg, use, transforms, presentation attributes, inline
+ * style, <style> rules (type, class, id, descendant and child selectors),
+ * inherited fill, fill-rule, stroke (width, caps, joins), opacity,
+ * currentColor, display and visibility. A stroke becomes a filled outline
+ * painted over its element's fill, at least minStroke wide. Gradients use their first stop color.
+ * Dashes, text, images, clipping and masks are ignored.
  */
 
 import { DOMParser } from "@xmldom/xmldom";
 import { parseColor, type RGB } from "./color";
-import { IDENTITY, multiply, transformedEllipse, type Contour, type Matrix } from "./geometry";
+import { flatten, IDENTITY, multiply, polygonArea, transformedEllipse, type Contour, type Matrix } from "./geometry";
+import { strokeOutline, type StrokeStyle } from "./stroke";
 import { pathContours } from "./pathData";
 
 export type FillRule = "nonzero" | "evenodd";
@@ -33,8 +36,9 @@ export interface ParsedSvg {
 
 type Style = Record<string, string>;
 
-const STYLE_PROPS = ["fill", "fill-opacity", "fill-rule", "opacity", "display", "visibility", "color", "stop-color"];
-const INHERITED = new Set(["fill", "fill-opacity", "fill-rule", "visibility", "color"]);
+const STROKE_PROPS = ["stroke", "stroke-opacity", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit"];
+const STYLE_PROPS = ["fill", "fill-opacity", "fill-rule", "opacity", "display", "visibility", "color", "stop-color", ...STROKE_PROPS];
+const INHERITED = new Set(["fill", "fill-opacity", "fill-rule", "visibility", "color", ...STROKE_PROPS]);
 const CONTAINERS = new Set(["svg", "g", "a", "switch"]);
 const SKIPPED = new Set([
   "defs", "symbol", "clipPath", "mask", "pattern", "marker", "linearGradient", "radialGradient",
@@ -186,7 +190,8 @@ function href(element: Element): string | null {
   return value?.startsWith("#") ? value.slice(1) : null;
 }
 
-export function parseSvg(text: string, size: number): ParsedSvg {
+/** minStroke (mm) is the narrowest a stroke may be; thinner ones widen to it. */
+export function parseSvg(text: string, size: number, minStroke = 0): ParsedSvg {
   const doc = new DOMParser().parseFromString(text, "image/svg+xml");
   const root = doc.documentElement as unknown as Element | null;
   if (!root || root.localName !== "svg") throw new Error("Not an SVG document");
@@ -225,14 +230,15 @@ export function parseSvg(text: string, size: number): ParsedSvg {
     return style;
   };
 
-  const fillColor = (style: Style): RGB | null => {
-    let value = (style.fill ?? "black").trim();
+  /** The paint's color, or null when it paints nothing. */
+  const paintColor = (style: Style, paint: "fill" | "stroke"): RGB | null => {
+    let value = (style[paint] ?? (paint === "fill" ? "black" : "none")).trim();
     const url = /^url\(\s*['"]?#([^'")\s]+)['"]?\s*\)/.exec(value);
     if (url) value = gradientColor(url[1]) ?? "none";
     if (value.toLowerCase() === "currentcolor") value = style.color ?? "black";
     const rgba = parseColor(value);
     if (!rgba) return null;
-    const alpha = rgba[3] * Number(style["fill-opacity"] ?? 1) * Number(style.opacity ?? 1);
+    const alpha = rgba[3] * Number(style[`${paint}-opacity`] ?? 1) * Number(style.opacity ?? 1);
     return alpha > 0 ? [rgba[0], rgba[1], rgba[2]] : null;
   };
 
@@ -253,7 +259,8 @@ export function parseSvg(text: string, size: number): ParsedSvg {
   let [vx, vy, vw, vh] = viewBox.length === 4 ? viewBox : [0, 0, length(root.getAttribute("width")), length(root.getAttribute("height"))];
 
   const shapes: FilledShape[] = [];
-  const raw: { element: Element; m: Matrix; color: RGB; fillRule: FillRule }[] = [];
+  /** Painted elements in order; a stroke's width is in the element's own units. */
+  const raw: { element: Element; m: Matrix; color: RGB; fillRule: FillRule; stroke?: StrokeStyle }[] = [];
 
   const walk = (element: Element, m: Matrix, ancestors: Element[], parent: Style, viaUse = 0) => {
     const tag = element.localName;
@@ -280,9 +287,25 @@ export function parseSvg(text: string, size: number): ParsedSvg {
       return;
     }
     if (style.visibility === "hidden" || style.visibility === "collapse") return;
-    const color = fillColor(style);
+    const color = paintColor(style, "fill");
     const fillRule = style["fill-rule"] === "evenodd" ? "evenodd" : "nonzero";
-    if (color) raw.push({ element, m: local, color, fillRule });
+    // A line has no inside to fill.
+    if (color && tag !== "line") raw.push({ element, m: local, color, fillRule });
+    const stroke = paintColor(style, "stroke");
+    const width = length(style["stroke-width"] ?? null, 1);
+    if (stroke && width > 0) {
+      const cap = style["stroke-linecap"];
+      const join = style["stroke-linejoin"];
+      raw.push({
+        element, m: local, color: stroke, fillRule: "nonzero",
+        stroke: {
+          width,
+          cap: cap === "round" || cap === "square" ? cap : "butt",
+          join: join === "round" || join === "bevel" ? join : "miter",
+          miterLimit: Math.max(1, Number(style["stroke-miterlimit"] ?? 4) || 4),
+        },
+      });
+    }
   };
   walk(root, IDENTITY, [], { opacity: "1" });
 
@@ -299,9 +322,16 @@ export function parseSvg(text: string, size: number): ParsedSvg {
   const scale = size / Math.max(vw, vh);
   // SVG is Y-down; flip so the model is Y-up with the canvas corner at the origin.
   const toMillimeters: Matrix = [scale, 0, 0, -scale, -vx * scale, (vy + vh) * scale];
-  for (const { element, m, color, fillRule } of raw) {
-    const contours = elementContours(element, multiply(toMillimeters, m));
-    if (contours.length) shapes.push({ contours, color, fillRule, label: element.getAttribute("id") ?? element.localName });
+  for (const { element, m, color, fillRule, stroke } of raw) {
+    const placed = multiply(toMillimeters, m);
+    let contours = elementContours(element, placed);
+    if (stroke && contours.length) {
+      // Widths scale by the transform's area scale: exact for uniform scaling, an average otherwise.
+      const width = stroke.width * Math.sqrt(Math.abs(placed[0] * placed[3] - placed[1] * placed[2]));
+      contours = strokeOutline(contours, { ...stroke, width: Math.max(width, minStroke) });
+    } else contours = contours.filter((c) => c.kind !== "path" || Math.abs(polygonArea(flatten(c, 4))) > 1e-9);
+    const label = (element.getAttribute("id") ?? element.localName) + (stroke ? " stroke" : "");
+    if (contours.length) shapes.push({ contours, color, fillRule, label });
   }
   return { width: vw * scale, height: vh * scale, shapes };
 }
@@ -344,10 +374,12 @@ function elementContours(element: Element, m: Matrix): Contour[] {
     case "polygon":
     case "polyline": {
       const n = numbers(attr("points"));
-      if (n.length < 6) return [];
+      if (n.length < 4) return [];
       const pairs = Array.from({ length: Math.floor(n.length / 2) }, (_, i) => `${n[2 * i]} ${n[2 * i + 1]}`);
-      return pathContours(`M${pairs.join("L")}Z`, m);
+      return pathContours(`M${pairs.join("L")}${element.localName === "polygon" ? "Z" : ""}`, m);
     }
+    case "line":
+      return pathContours(`M${length(attr("x1"))} ${length(attr("y1"))}L${length(attr("x2"))} ${length(attr("y2"))}`, m);
     default:
       return [];
   }

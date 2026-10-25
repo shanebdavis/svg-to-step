@@ -41,6 +41,32 @@ class Scanner {
   }
 }
 
+/** Segments shorter than this (mm) are dropped: OpenCascade can't make edges of them. */
+const EPSILON = 1e-4;
+
+const controlPoints = (s: Segment): Point[] =>
+  s.kind === "line" ? [s.from, s.to] : s.kind === "cubic" ? [s.from, s.c1, s.c2, s.to] : [s.from, s.via, s.to];
+
+const near = (a: Point, b: Point) => Math.hypot(a[0] - b[0], a[1] - b[1]) < EPSILON;
+
+/**
+ * A subpath as a closed contour: without segments that collapse to a point
+ * (all control points within EPSILON, as exporters sometimes write), each
+ * starting exactly where the one before ends. A subpath left open gets a
+ * closing line for filling, and is marked open for stroking.
+ */
+function tidy(segments: Segment[], closed: boolean): Contour | null {
+  const kept = segments.filter((s) => !controlPoints(s).every((p) => near(p, s.from)));
+  if (!kept.length) return null;
+  const joined = kept.map((s, i) => (i ? { ...s, from: kept[i - 1].to } : s));
+  const [first, last] = [joined[0], joined[joined.length - 1]];
+  if (!near(last.to, first.from)) {
+    return { kind: "path", segments: [...joined, { kind: "line", from: last.to, to: first.from }], ...(closed ? {} : { open: true }) };
+  }
+  joined[joined.length - 1] = { ...last, to: first.from };
+  return { kind: "path", segments: joined };
+}
+
 /** Parse path data into closed contours mapped through m. Every subpath closes, as filling does. */
 export function pathContours(d: string, m: Matrix): Contour[] {
   const contours: Contour[] = [];
@@ -52,18 +78,11 @@ export function pathContours(d: string, m: Matrix): Contour[] {
   let lastQuadControl: Point | null = null;
   let command: string | null = null;
 
-  const push = (s: Segment) => {
-    const t = transformSegment(m, s);
-    if (t.from[0] !== t.to[0] || t.from[1] !== t.to[1] || t.kind !== "line") segments.push(t);
-  };
+  const push = (s: Segment) => segments.push(transformSegment(m, s));
 
-  const finish = () => {
-    if (segments.length) {
-      const first = segments[0].from;
-      const last = segments[segments.length - 1].to;
-      if (first[0] !== last[0] || first[1] !== last[1]) segments.push({ kind: "line", from: last, to: first });
-      contours.push({ kind: "path", segments });
-    }
+  const finish = (closed = false) => {
+    const contour = tidy(segments, closed);
+    if (contour) contours.push(contour);
     segments = [];
   };
 
@@ -83,7 +102,7 @@ export function pathContours(d: string, m: Matrix): Contour[] {
         break;
       case "Z":
         if (segments.length) push({ kind: "line", from: current, to: start });
-        finish();
+        finish(true);
         current = start;
         break;
       case "L": {
