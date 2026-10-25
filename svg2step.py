@@ -2,7 +2,8 @@
 
 Puzzle mode: the SVG canvas becomes a solid slab with every painted shape cut
 out of it. Each visible connected region of a single color becomes its own
-solid that fills its cutout exactly.
+solid that fills its cutout exactly. An optional single-color base sits under
+the puzzle.
 
 Layers mode: one layer per color, stacked so each color shows from the top at
 its own step height.
@@ -12,11 +13,12 @@ the SVG renders.
 """
 
 import argparse
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 from build123d import (
-    Color, Compound, Face, Rectangle, SkipClean, Vector, export_step, extrude,
+    Color, Compound, Face, Plane, SkipClean, Vector, export_step, extrude,
 )
 from ocpsvg import ColorAndLabel, import_svg_document
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
@@ -65,12 +67,17 @@ def merge_touching(faces):
     Only faces are unified. Unifying edges would replace chains of SVG curves
     with approximating B-splines that no longer match the neighboring pieces.
     """
-    if len(faces) == 1:
+    if len(faces) <= 1:
         return faces
     fused = faces[0].fuse(*faces[1:])
     unify = ShapeUpgrade_UnifySameDomain(fused.wrapped, False, True, False)
     unify.Build()
     return faces_of(Compound(unify.Shape()))
+
+
+def outline(faces):
+    """Outer boundary of faces: their union with holes filled, so islands inside a hole merge too."""
+    return merge_touching([Face(face.outer_wire()) for face in merge_touching(faces)])
 
 
 def best_neighbor(sliver, pieces, tolerance):
@@ -139,31 +146,40 @@ def layer_thicknesses(count, height, layer_thickness=None):
 
 
 def build(svg_path, size, height, bg_color, mode="puzzle", order="large", min_area=0.5,
-          layer_thickness=None):
+          layer_thickness=None, base_thickness=None, base_color=None):
     """bg_color of None leaves out the slab, so only the SVG's colors are built.
 
     Regions smaller than min_area (mm²) merge into their largest-border neighbor.
 
     mode "puzzle": every color region is a full-height piece set into the slab.
+    A base_thickness adds a solid base under the puzzle. It covers the canvas,
+    or without a slab, the outline of the art with holes filled. Its color is
+    base_color, or by default the color covering the most area.
     mode "layers": one layer per color, stacked by area (order "large" or
     "small" first). Each layer covers its own color's region plus every region
     above it, so each color shows from the top at its own step. Layer thickness
     follows layer_thicknesses.
 
     Each solid gets a `level` (0 = bottom) for exploded previews.
+
+    Returns the model and its palette: (rgb, area in mm²) for each SVG color,
+    largest area first.
     """
     # build123d's automatic clean would also unify edges; see merge_touching.
     with SkipClean():
-        return _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickness)
+        return _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickness,
+                      base_thickness, base_color)
 
 
-def _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickness):
+def _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickness,
+           base_thickness, base_color):
     painted, vb = load_painted_faces(svg_path)
     scale = size / max(vb.width, vb.height)
     # The importer reports the viewBox already flipped into Y-up coordinates.
-    canvas = Rectangle(vb.width, vb.height).translate(
-        Vector(vb.x + vb.width / 2, vb.y + vb.height / 2)
-    ).faces()[0]
+    # Placed by its plane, not translated: scale() ignores a translated shape's location.
+    canvas = Face.make_rect(
+        vb.width, vb.height, Plane(origin=(vb.x + vb.width / 2, vb.y + vb.height / 2, 0))
+    )
 
     by_color, covered = visible_regions(painted, canvas)
     regions = {rgb: merge_touching(faces) for rgb, faces in by_color.items()}
@@ -173,6 +189,8 @@ def _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickn
         regions, min_area / scale**2, tolerance=max(vb.width, vb.height) * 1e-6
     )
     background = regions.pop(BACKGROUND, [])
+    palette = sorted(((rgb, sum(f.area for f in faces) * scale**2) for rgb, faces in regions.items()),
+                     key=lambda item: item[1], reverse=True)
 
     def to_solid(face, label, rgb, level, z=0.0, thickness=height):
         solid = extrude(face.scale(scale).translate(Vector(0, 0, z)), amount=thickness)
@@ -181,11 +199,18 @@ def _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickn
 
     solids = []
     if mode == "puzzle":
+        z, level = 0.0, 0
+        if base_thickness:
+            color = base_color or (palette[0][0] if palette else bg_color or parse_hex("#808080"))
+            footprint = [canvas] if bg_color else outline([f for faces in regions.values() for f in faces])
+            for i, face in enumerate(footprint, 1):
+                solids.append(to_solid(face, f"base-{i}", color, 0, 0.0, base_thickness))
+            z, level = base_thickness, 1
         for i, face in enumerate(background, 1):
-            solids.append(to_solid(face, f"background-{i}", bg_color, 0))
+            solids.append(to_solid(face, f"background-{i}", bg_color, level, z))
         for rgb, faces in regions.items():
             for i, face in enumerate(faces, 1):
-                solids.append(to_solid(face, f"{to_hex(rgb)}-{i}", rgb, 1))
+                solids.append(to_solid(face, f"{to_hex(rgb)}-{i}", rgb, level + 1, z))
     else:
         layers = sorted(regions.items(), key=lambda item: sum(f.area for f in item[1]),
                         reverse=order == "large")
@@ -199,10 +224,12 @@ def _build(svg_path, size, height, bg_color, mode, order, min_area, layer_thickn
                 label = f"L{level + 1}-{to_hex(rgb)}-{i}"
                 solids.append(to_solid(face, label, rgb, level, z, thicknesses[level]))
 
+    if not solids:
+        raise ValueError("nothing to build: the SVG has no filled shapes and the slab is off")
     # Place the canvas corner at the origin, so pieces land in the same spot with or without the slab.
     corner = Vector(vb.x, vb.y) * scale
     solids = [solid.translate(-corner) for solid in solids]
-    return Compound(label=Path(svg_path).stem, children=solids), by_color
+    return Compound(label=Path(svg_path).stem, children=solids), palette
 
 
 def main():
@@ -224,17 +251,25 @@ def main():
     parser.add_argument("--layer-thickness", type=float,
                         help="layers mode: fixed thickness per layer in mm (default: height / layers). "
                              "Raises the total height if needed; otherwise the bottom layer takes the rest")
+    parser.add_argument("--base", type=float, metavar="MM",
+                        help="puzzle mode: add a solid base this thick (mm) under the puzzle")
+    parser.add_argument("--base-color",
+                        help="base color (default: the SVG color covering the most area)")
     parser.add_argument("-o", "--output", type=Path,
                         help="output STEP path (default: alongside the SVG)")
     args = parser.parse_args()
 
-    model, by_color = build(args.svg, args.size, args.height, parse_hex(args.bg_color),
-                            args.mode, args.order, args.min_area, args.layer_thickness)
+    try:
+        model, palette = build(args.svg, args.size, args.height, parse_hex(args.bg_color),
+                               args.mode, args.order, args.min_area, args.layer_thickness,
+                               args.base, parse_hex(args.base_color))
+    except ValueError as error:
+        sys.exit(f"{args.svg}: {error}")
     output = args.output or args.svg.with_suffix(".step")
     export_step(model, str(output))
 
     bbox = model.bounding_box()
-    print(f"{output}: {len(model.solids())} solids, {len(by_color)} colors, "
+    print(f"{output}: {len(model.solids())} solids, {len(palette)} colors, "
           f"{bbox.size.X:.2f} x {bbox.size.Y:.2f} x {bbox.size.Z:.2f} mm")
 
 

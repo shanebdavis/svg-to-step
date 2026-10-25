@@ -15,6 +15,7 @@ Puzzle mode details:
 - Each visible, connected, single-color region becomes its own solid, colored to match the SVG. It fills its cutout exactly, with no clearance.
 - Overlapping shapes resolve by paint order: pieces show exactly what the SVG renders.
 - Curves stay true curves (circles, arcs, Beziers), not polygon facets.
+- Optional base: a solid, single-color layer under the puzzle, with its own thickness. It covers the canvas, or with the slab off, follows the outline of the art with holes filled. Its color defaults to the SVG color with the most visible area; any other color in the model can be picked instead. A thin puzzle (two print layers, say) on a thick base keeps color changes to the top layers, so a multi-material print swaps filament only a couple of times per color.
 
 ## Setup
 
@@ -35,6 +36,8 @@ python3.13 -m venv .venv
 - `--min-area`: regions smaller than this (mm², default 0.5) merge into the neighbor they share the most border with. Removes unprintable slivers left by nearly coincident edges in the artwork.
 - `--mode`: `puzzle` (default) or `layers`.
 - `--order`: layers mode stacking, `large` (default) or `small` area first.
+- `--base`: puzzle mode, adds a base this many mm thick under the puzzle. The total height becomes base + height.
+- `--base-color`: base color, default the SVG color with the most visible area.
 - `--layer-thickness`: layers mode, fixed mm per layer. Default splits the height evenly. If layers × thickness exceeds the height, the model gets taller; if it falls short, the bottom layer takes the extra.
 - `-o`: output path, default `art.step` next to the SVG.
 
@@ -48,7 +51,7 @@ python3.13 -m venv .venv
 
 Double-click `Start SVG to STEP.command` in Finder. The first run sets up the Python environment (about a minute). Close the Terminal window to stop the app. From a shell, `.venv/bin/python app.py` does the same.
 
-It opens a local page at http://localhost:8765. Drop in an SVG, adjust size, height and slab color (or turn the slab off), and the 3D preview updates live. Settings are remembered between visits. "Explode" lifts pieces or layers apart to check the fit. Download STEP saves the current model.
+It opens a local page at http://localhost:8765. Drop in an SVG, adjust size, height and slab color (or turn the slab off), add a base under a puzzle, and the 3D preview updates live. Settings are remembered between visits. "Explode" lifts pieces or layers apart to check the fit. Download STEP saves the current model.
 
 ## Browser version (web/)
 

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SVG to STEP</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1 11l7 4 7-4V5L8 1 1 5z' fill='%232563eb'/%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #f4f4f2; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73;
@@ -76,6 +77,12 @@
     <label class="check"><input id="slab" type="checkbox" checked>Slab</label>
     <input id="bgColor" type="color" value="#808080" title="Slab color">
   </div>
+  <div class="slab">
+    <label class="check"><input id="base" type="checkbox">Base</label>
+    <input id="baseThickness" type="number" value="2" min="0.1" step="0.5" title="Base thickness, mm, under the puzzle">
+  </div>
+  <label>Base color<span>defaults to the color with the most area</span>
+    <select id="baseColor"><option value="">Most area</option></select></label>
   <label>Explode<span>preview only: lifts pieces or layers apart</span><input id="lift" type="range" min="0" max="3" step="0.05" value="0"></label>
   <button id="download" disabled>Download STEP</button>
   <div id="status"></div>
@@ -184,6 +191,8 @@ async function convert() {
     size: $("size").value, height: $("height").value,
     bgColor: $("slab").checked ? $("bgColor").value : null,
     mode: $("mode").value, order: $("order").value, layerThickness: $("layerThickness").value,
+    baseThickness: $("mode").value === "puzzle" && $("base").checked ? $("baseThickness").value : null,
+    baseColor: baseColor(),
   });
   try {
     const response = await fetch("/convert", { method: "POST", body });
@@ -191,12 +200,29 @@ async function convert() {
     if (request !== pending) return;
     if (!response.ok) throw new Error(result.error);
     showModel(result);
+    fillPalette(result.palette);
     const { solids, colors, size } = result.stats;
     setStatus(`${solids} solids, ${colors} colors\n${size.join(" × ")} mm`);
     $("download").disabled = false;
   } catch (error) {
     if (request === pending) setStatus(error.message, true);
   }
+}
+
+// "" picks the color with the most area; "slab" follows the slab color.
+function baseColor() {
+  const value = $("baseColor").value;
+  if (value === "slab") return $("slab").checked ? $("bgColor").value : null;
+  return value || null;
+}
+
+function fillPalette(palette) {
+  const select = $("baseColor");
+  const options = palette.map((hex, i) => (i ? [hex, hex] : ["", `${hex} (most area)`]));
+  if ($("slab").checked) options.push(["slab", "Slab color"]);
+  const chosen = options.some(([value]) => value === select.value) ? select.value : "";
+  select.replaceChildren(...options.map(([value, text]) => new Option(text, value)));
+  select.value = chosen;
 }
 
 let timer;
@@ -207,6 +233,7 @@ async function loadFile(file) {
   svg = { name: file.name, text: await file.text() };
   $("filename").textContent = file.name;
   $("hint").hidden = true;
+  $("baseColor").value = "";
   fitted = false;
   convert();
 }
@@ -224,7 +251,7 @@ for (const target of [drop, main]) {
   });
 }
 const SETTINGS_KEY = "svg2step.settings";
-const settingIds = ["mode", "order", "layerThickness", "size", "height", "slab", "bgColor", "lift"];
+const settingIds = ["mode", "order", "layerThickness", "size", "height", "slab", "bgColor", "base", "baseThickness", "lift"];
 const valueKey = (el) => (el.type === "checkbox" ? "checked" : "value");
 
 function saveSettings() {
@@ -241,15 +268,17 @@ function restoreSettings() {
 function syncEnabled() {
   $("bgColor").disabled = !$("slab").checked;
   $("order").disabled = $("layerThickness").disabled = $("mode").value !== "layers";
+  $("base").disabled = $("mode").value !== "puzzle";
+  $("baseThickness").disabled = $("baseColor").disabled = $("base").disabled || !$("base").checked;
 }
 
 restoreSettings();
 syncEnabled();
 for (const id of settingIds) $(id).addEventListener("input", saveSettings);
-for (const id of ["mode", "order", "layerThickness", "size", "height", "bgColor", "slab"]) {
+for (const id of ["mode", "order", "layerThickness", "size", "height", "bgColor", "slab", "base", "baseThickness", "baseColor"]) {
   $(id).addEventListener("input", convertSoon);
 }
-for (const id of ["mode", "slab"]) $(id).addEventListener("input", syncEnabled);
+for (const id of ["mode", "slab", "base"]) $(id).addEventListener("input", syncEnabled);
 $("size").addEventListener("input", () => { fitted = false; });
 $("lift").addEventListener("input", applyLift);
 $("download").onclick = () => { location.href = "/model.step"; };

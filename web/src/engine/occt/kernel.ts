@@ -213,6 +213,11 @@ export function faceFromWires(outer: TopoDS_Wire, inners: TopoDS_Wire[]): TopoDS
   return oc.TopoDS.Face(fix.Face());
 }
 
+/** The face with its holes filled. */
+export function withoutHoles(face: TopoDS_Face): TopoDS_Face {
+  return faceFromWires(oc.BRepTools.OuterWire(face), []);
+}
+
 export type FillRule = "nonzero" | "evenodd";
 
 const filled = (winding: number, rule: FillRule) => (rule === "evenodd" ? winding % 2 !== 0 : winding !== 0);

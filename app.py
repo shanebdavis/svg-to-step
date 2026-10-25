@@ -41,10 +41,12 @@ def convert(params):
         f.write(params["svg"])
     stem = Path(params.get("name") or "model").stem
     with build_lock:
-        model, by_color = build(
+        model, palette = build(
             f.name, float(params["size"]), float(params["height"]),
             parse_hex(params["bgColor"]), params["mode"], params["order"],
             layer_thickness=float(params["layerThickness"]) if params.get("layerThickness") else None,
+            base_thickness=float(params["baseThickness"]) if params.get("baseThickness") else None,
+            base_color=parse_hex(params.get("baseColor")),
         )
         model.label = stem
         with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as out:
@@ -54,9 +56,10 @@ def convert(params):
     size = model.bounding_box().size
     return {
         "meshes": meshes,
+        "palette": [to_hex(rgb) for rgb, _ in palette],
         "stats": {
             "solids": len(model.children),
-            "colors": len(by_color),
+            "colors": len(palette),
             "size": [round(size.X, 2), round(size.Y, 2), round(size.Z, 2)],
         },
     }

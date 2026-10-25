@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from "react"
 import { DEFAULT_OPTIONS, type BuildOptions } from "./engine/build";
 import { buildModel, loadEngine, Superseded } from "./engine/client";
 import type { BuildResult } from "./engine/protocol";
-import { parseColor } from "./engine/svg/color";
+import { parseColor, type RGB } from "./engine/svg/color";
 import { useStoredState } from "./useStoredState";
 import { Viewer } from "./Viewer";
 
@@ -14,16 +14,27 @@ const DEFAULT_SETTINGS = {
   height: 5,
   slab: true,
   slabColor: "#808080",
+  base: false,
+  baseThickness: 2,
   explode: 0,
 };
 
 type Settings = typeof DEFAULT_SETTINGS;
 type Status = { kind: "idle" | "working" | "ready" | "error"; message: string };
 
-function toOptions(s: Settings): BuildOptions | null {
+const SLAB = "slab";
+
+const toRgb = (hex: string): RGB | null => {
+  const rgba = parseColor(hex);
+  return rgba && [rgba[0], rgba[1], rgba[2]];
+};
+
+/** baseColor is a hex color, SLAB for the slab's color, or null for the color with the most area. */
+function toOptions(s: Settings, baseColor: string | null): BuildOptions | null {
   const layerThickness = s.layerThickness.trim() === "" ? null : Number(s.layerThickness);
-  if (!(s.size > 0) || !(s.height > 0) || (layerThickness !== null && !(layerThickness > 0))) return null;
-  const rgba = parseColor(s.slabColor);
+  const baseThickness = s.mode === "puzzle" && s.base ? s.baseThickness : null;
+  const positive = [s.size, s.height, layerThickness ?? 1, baseThickness ?? 1];
+  if (!positive.every((v) => v > 0)) return null;
   return {
     ...DEFAULT_OPTIONS,
     mode: s.mode,
@@ -31,13 +42,16 @@ function toOptions(s: Settings): BuildOptions | null {
     size: s.size,
     height: s.height,
     layerThickness,
-    slabColor: s.slab && rgba ? [rgba[0], rgba[1], rgba[2]] : null,
+    slabColor: s.slab ? toRgb(s.slabColor) : null,
+    baseThickness,
+    baseColor: baseColor ? toRgb(baseColor === SLAB ? s.slabColor : baseColor) : null,
   };
 }
 
 export function App() {
   const [settings, setSettings] = useStoredState("svg2step.settings", DEFAULT_SETTINGS);
   const [file, setFile] = useState<{ name: string; text: string } | null>(null);
+  const [chosenBase, setChosenBase] = useState<string | null>(null);
   const [result, setResult] = useState<BuildResult | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle", message: "Loading CAD engine…" });
   const [dragging, setDragging] = useState(false);
@@ -52,13 +66,14 @@ export function App() {
   }, []);
 
   const { explode, ...buildSettings } = settings;
-  const options = toOptions(settings);
+  const baseColor = chosenBase === SLAB && !settings.slab ? null : chosenBase;
+  const options = toOptions(settings, baseColor);
   const optionsKey = JSON.stringify(options);
 
   useEffect(() => {
     if (!file) return;
     if (!options) {
-      setStatus({ kind: "error", message: "Size, height and layer thickness must be positive numbers." });
+      setStatus({ kind: "error", message: "Size, height and thicknesses must be positive numbers." });
       return;
     }
     let cancelled = false;
@@ -91,6 +106,7 @@ export function App() {
     if (!picked) return;
     setFile({ name: picked.name, text: await picked.text() });
     setResult(null);
+    setChosenBase(null);
   }, []);
 
   const download = () => {
@@ -118,6 +134,10 @@ export function App() {
   };
 
   const layers = buildSettings.mode === "layers";
+  const base = !layers && settings.base;
+  const palette = result?.palette ?? [];
+  const swatches = settings.slab && !palette.includes(settings.slabColor) ? [...palette, SLAB] : palette;
+  const selectedBase = baseColor ?? palette[0];
   return (
     <div className="app">
       <aside>
@@ -155,11 +175,11 @@ export function App() {
             <input type="number" min="1" step="1" value={settings.size} onChange={(e) => update("size", e.target.valueAsNumber)} />
           </label>
           <label>
-            Height<span>Z, mm</span>
+            Height<span>{base ? "puzzle, mm" : "Z, mm"}</span>
             <input type="number" min="0.1" step="0.5" value={settings.height} onChange={(e) => update("height", e.target.valueAsNumber)} />
           </label>
         </div>
-        <div className="slab">
+        <div className="toggle">
           <label className="check">
             <input type="checkbox" checked={settings.slab} onChange={(e) => update("slab", e.target.checked)} />
             Slab
@@ -167,6 +187,31 @@ export function App() {
           <input type="color" title="Slab color" disabled={!settings.slab} value={settings.slabColor}
             onChange={(e) => update("slabColor", e.target.value)} />
         </div>
+        <div className="toggle">
+          <label className="check">
+            <input type="checkbox" disabled={layers} checked={settings.base} onChange={(e) => update("base", e.target.checked)} />
+            Base
+          </label>
+          <input type="number" min="0.1" step="0.5" title="Base thickness, mm, under the puzzle" disabled={!base}
+            value={settings.baseThickness} onChange={(e) => update("baseThickness", e.target.valueAsNumber)} />
+          <span className="unit">mm</span>
+        </div>
+        {base && swatches.length > 0 && (
+          <div className="field">
+            Base color<span>defaults to the color with the most area</span>
+            <div className="swatches" role="radiogroup" aria-label="Base color">
+              {swatches.map((swatch) => {
+                const hex = swatch === SLAB ? settings.slabColor : swatch;
+                const note = swatch === SLAB ? " (slab)" : swatch === palette[0] ? " (most area)" : "";
+                return (
+                  <button key={swatch} type="button" role="radio" aria-checked={swatch === selectedBase}
+                    className="swatch" style={{ background: hex }} title={hex + note}
+                    onClick={() => setChosenBase(swatch === palette[0] ? null : swatch)} />
+                );
+              })}
+            </div>
+          </div>
+        )}
         <label>
           Explode<span>preview only: lifts pieces or layers apart</span>
           <input type="range" min="0" max="3" step="0.05" value={explode} onChange={(e) => update("explode", e.target.valueAsNumber)} />
