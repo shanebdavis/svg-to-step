@@ -32,8 +32,11 @@ const toRgb = (hex: string): RGB | null => {
   return rgba && [rgba[0], rgba[1], rgba[2]];
 };
 
-/** baseColor is a hex color, SLAB for the slab's color, or null for the color with the most area. */
-function toOptions(s: Settings, baseColor: string | null): BuildOptions | null {
+/**
+ * baseColor is a hex color, SLAB for the slab's color, or null for the color with the most area.
+ * maxColors limits the SVG's colors, or null keeps them all.
+ */
+function toOptions(s: Settings, baseColor: string | null, maxColors: number | null): BuildOptions | null {
   const layerThickness = s.layerThickness.trim() === "" ? null : Number(s.layerThickness);
   const baseThickness = s.mode === "puzzle" && s.base ? s.baseThickness : null;
   const positive = [s.size, s.height, layerThickness ?? 1, baseThickness ?? 1];
@@ -50,16 +53,19 @@ function toOptions(s: Settings, baseColor: string | null): BuildOptions | null {
     slabPadding: s.slabPadding,
     baseThickness,
     baseColor: baseColor ? toRgb(baseColor === SLAB ? s.slabColor : baseColor) : null,
+    maxColors,
   };
 }
 
 export function App() {
   const [settings, setSettings] = useStoredState("svg2step.settings", DEFAULT_SETTINGS);
-  const [{ file, chosenBase }, setDocument] = useStoredState("svg2step.document", {
+  const [{ file, chosenBase, colorLimit }, setDocument] = useStoredState("svg2step.document", {
     file: null as { name: string; text: string } | null,
     chosenBase: null as string | null,
+    colorLimit: null as number | null,
   });
   const setChosenBase = (base: string | null) => setDocument((d) => ({ ...d, chosenBase: base }));
+  const setColorLimit = (limit: number | null) => setDocument((d) => ({ ...d, colorLimit: limit }));
   const [result, setResult] = useState<BuildResult | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle", message: "Loading CAD engine…" });
   const [dragging, setDragging] = useState(false);
@@ -75,7 +81,7 @@ export function App() {
 
   const { explode, ...buildSettings } = settings;
   const baseColor = chosenBase === SLAB && !settings.slab ? null : chosenBase;
-  const options = toOptions(settings, baseColor);
+  const options = toOptions(settings, baseColor, colorLimit);
   const optionsKey = JSON.stringify(options);
 
   useEffect(() => {
@@ -110,10 +116,16 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file, optionsKey]);
 
+  // A color limit can merge away the chosen base color.
+  useEffect(() => {
+    if (result && chosenBase && chosenBase !== SLAB && !result.palette.includes(chosenBase)) setChosenBase(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result]);
+
   const openFile = useCallback(async (picked: File | undefined) => {
     if (!picked) return;
     const text = await picked.text();
-    setDocument({ file: { name: picked.name, text }, chosenBase: null });
+    setDocument({ file: { name: picked.name, text }, chosenBase: null, colorLimit: null });
     setResult(null);
   }, [setDocument]);
 
@@ -156,6 +168,13 @@ export function App() {
         </button>
         <input ref={input} type="file" accept=".svg,image/svg+xml" hidden onChange={(e) => openFile(e.target.files?.[0])} />
 
+        {result && result.svgColors > 2 && (
+          <label>
+            Colors<span>{colorLimit ?? result.svgColors} of {result.svgColors}; merges the most alike first</span>
+            <input type="range" min="2" max={result.svgColors} step="1" value={colorLimit ?? result.svgColors}
+              onChange={(e) => setColorLimit(e.target.valueAsNumber >= result.svgColors ? null : e.target.valueAsNumber)} />
+          </label>
+        )}
         <div className="row">
           <label>
             Mode
