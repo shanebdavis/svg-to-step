@@ -21,6 +21,8 @@ export interface BuildResult {
   /** Hex colors of the SVG, largest visible area first. */
   palette: string[];
   step: Uint8Array;
+  /** Distinct visible colors in the SVG, before any color limit. */
+  svgColors: number;
   stats: { solids: number; colors: number; size: [number, number, number]; seconds: number };
 }
 

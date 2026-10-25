@@ -10,6 +10,7 @@
  * own step height.
  *
  * Either way, overlaps resolve by paint order, so the top view matches the SVG.
+ * An optional color limit merges the most alike colors first.
  */
 
 import type { TopoDS_Face, TopoDS_Shape, TopoDS_Solid } from "replicad-opencascadejs";
@@ -20,6 +21,7 @@ import {
   area, boundingBox, common, cut, distanceToPoint, edgeLength, edgeSamples, edgesOf, extrude, faceFromWires,
   facesFromContours, facesOf, fuse, mesh, rectangleFace, repairFace, unifyFaces, wireFromContour, withoutHoles, type Box,
 } from "./occt/kernel";
+import { reduceColors } from "./reduceColors";
 import { wrapContour, type WrapShape } from "./wrap";
 
 export interface BuildOptions {
@@ -45,13 +47,15 @@ export interface BuildOptions {
   baseThickness: number | null;
   /** Base color, or null for the color covering the most area. */
   baseColor: RGB | null;
+  /** Most colors to keep from the SVG, or null for all. */
+  maxColors: number | null;
   /** Regions under this area (mm²) merge into a neighbor. */
   minArea: number;
 }
 
 export const DEFAULT_OPTIONS: BuildOptions = {
   size: 100, height: 5, slabColor: [128 / 255, 128 / 255, 128 / 255], slabShape: "canvas", slabPadding: 5,
-  mode: "puzzle", order: "large", layerThickness: null, baseThickness: null, baseColor: null, minArea: 0.5,
+  mode: "puzzle", order: "large", layerThickness: null, baseThickness: null, baseColor: null, maxColors: null, minArea: 0.5,
 };
 
 export interface Part {
@@ -66,6 +70,8 @@ export interface Model {
   parts: Part[];
   /** Each SVG color and its visible area (mm²), largest first. */
   palette: { color: RGB; area: number }[];
+  /** Distinct visible colors in the SVG, before any color limit. */
+  svgColors: number;
   width: number;
   height: number;
 }
@@ -86,6 +92,22 @@ function visibleRegions(painted: { face: TopoDS_Face; key: Key }[], canvas: Topo
     covered = covered ? fuse([covered, face]) : face;
   }
   return { byColor, covered };
+}
+
+const totalArea = (faces: TopoDS_Face[]) => faces.reduce((sum, f) => sum + area(f), 0);
+
+/** Regrouped by color once reduceColors merges down to count; colorOf learns the merged colors. */
+function limitColors(byColor: Map<Key, TopoDS_Face[]>, colorOf: Map<Key, RGB>, count: number | null) {
+  if (count === null || byColor.size <= count) return byColor;
+  const keys = [...byColor.keys()];
+  const colors = reduceColors(keys.map((key) => ({ color: colorOf.get(key)!, area: totalArea(byColor.get(key)!) })), count);
+  const merged = new Map<Key, TopoDS_Face[]>();
+  keys.forEach((key, i) => {
+    const hex = toHex(colors[i]);
+    colorOf.set(hex, colors[i]);
+    merged.set(hex, [...(merged.get(hex) ?? []), ...byColor.get(key)!]);
+  });
+  return merged;
 }
 
 /** Fuse same-color fragments, then split into connected regions. */
@@ -181,13 +203,12 @@ export function build(svgText: string, options: BuildOptions): Model {
 
   const { byColor, covered } = visibleRegions(painted, canvas);
   let regions = new Map<Key, TopoDS_Face[]>();
-  for (const [key, faces] of byColor) regions.set(key, mergeTouching(faces));
+  for (const [key, faces] of limitColors(byColor, colorOf, options.maxColors)) regions.set(key, mergeTouching(faces));
   const { slab, art } = slabFace(options, canvas, covered);
   if (options.slabColor) regions.set(BACKGROUND, art ? facesOf(cut(slab, art)) : [slab]);
   regions = absorbSlivers(regions, options.minArea, Math.max(svg.width, svg.height) * 1e-6);
   const background = regions.get(BACKGROUND) ?? [];
   regions.delete(BACKGROUND);
-  const totalArea = (faces: TopoDS_Face[]) => faces.reduce((sum, f) => sum + area(f), 0);
   const palette = [...regions]
     .map(([key, faces]) => ({ color: colorOf.get(key)!, area: totalArea(faces) }))
     .sort((a, b) => b.area - a.area);
@@ -231,5 +252,5 @@ export function build(svgText: string, options: BuildOptions): Model {
       }));
     });
   }
-  return { parts, palette, width: svg.width, height: svg.height };
+  return { parts, palette, svgColors: byColor.size, width: svg.width, height: svg.height };
 }

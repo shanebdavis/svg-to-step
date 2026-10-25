@@ -64,7 +64,7 @@ cd web
 npm install
 npm start        # development server, opens the browser
 npm run serve    # production build, served at http://localhost:8775
-npm test         # parity with svg2step.py, fill rules, SVG parsing, slab shapes, STEP and 3MF output
+npm test         # parity with svg2step.py, fill rules, SVG parsing, slab shapes, color reduction, STEP and 3MF output
 npm run build    # static site in web/dist
 ```
 
@@ -76,6 +76,7 @@ Differences from the Python version:
 - Elliptical arcs and non-uniformly scaled circles become Bezier curves; circles, circular arcs and ellipses stay exact.
 - The slab can be the canvas or a square, circle or hexagon: the smallest one around the visible art, grown by a padding in mm.
 - Download 3MF saves a Bambu Studio file: one object with a part per color, each on its own filament, with the colors stored for Bambu Studio to map onto your filaments.
+- A Colors slider merges the SVG's colors down to as few as two. It merges the pair that looks most alike first (distance in OKLab, a perceptually uniform color space), with no dithering. A merged color is the area-weighted average of its members.
 - The last SVG is remembered along with the settings, so a reload picks up where you left off.
 
 `web/test/reference.json` holds svg2step.py results; regenerate it with `.venv/bin/python web/test/make_reference.py` after changing the Python version.

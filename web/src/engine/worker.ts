@@ -41,6 +41,7 @@ self.onmessage = async ({ data }: MessageEvent<BuildRequest>) => {
     const result: BuildResult = {
       meshes,
       palette: model.palette.map((p) => toHex(p.color)),
+      svgColors: model.svgColors,
       step,
       stats: {
         solids: model.parts.length,
