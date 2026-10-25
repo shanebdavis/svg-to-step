@@ -44,7 +44,8 @@ export type Segment =
 
 /** A closed outline: either a chain of segments or a whole circle/ellipse. */
 export type Contour =
-  | { kind: "path"; segments: Segment[] }
+  /** open: the last segment only closes the outline for filling; a stroke leaves it out. */
+  | { kind: "path"; segments: Segment[]; open?: boolean }
   | { kind: "circle"; center: Point; radius: number }
   | { kind: "ellipse"; center: Point; rx: number; ry: number; /** radians, x axis */ angle: number };
 

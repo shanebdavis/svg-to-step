@@ -37,6 +37,21 @@ describe("path data", () => {
   });
 });
 
+describe("degenerate path data", () => {
+  const ends = (c: Contour) => (c.kind === "path" ? c.segments.map((s) => [s.from, s.to]) : []);
+
+  it("drops curves collapsed to a point and keeps the outline joined", () => {
+    const [c] = pathContours("M0 0C0 0 0 0 0 0L10 0L10 10C10 10 10 10 10 10L0 10Z", [1, 0, 0, 1, 0, 0]);
+    expect(ends(c)).toEqual([[[0, 0], [10, 0]], [[10, 0], [10, 10]], [[10, 10], [0, 10]], [[0, 10], [0, 0]]]);
+  });
+
+  it("closes onto the start instead of adding a hair-length closing line", () => {
+    const [c] = pathContours("M0 0L10 0L10 10L0.00001 0", [1, 0, 0, 1, 0, 0]);
+    expect(c.kind === "path" && c.segments).toHaveLength(3);
+    expect(ends(c).at(-1)![1]).toEqual([0, 0]);
+  });
+});
+
 describe("colors and transforms", () => {
   it("parses CSS colors", () => {
     expect(parseColor("#f00")).toEqual([1, 0, 0, 1]);
@@ -86,10 +101,34 @@ describe("documents", () => {
       <g opacity="0"><rect width="1" height="1"/></g>
       <g style="display:none"><rect width="1" height="1"/></g>
       <rect visibility="hidden" width="1" height="1"/>
-      <line x1="0" y1="0" x2="10" y2="10" stroke="black"/>
+      <line x1="0" y1="0" x2="10" y2="10" stroke="none"/>
       <defs><rect id="d" fill="#0f0" width="5" height="5"/></defs>
       <rect fill="#f00" width="1" height="1"/>`), 100);
     expect(parsed.shapes.map((s) => toHex(s.color))).toEqual(["#ff0000"]);
+  });
+
+  describe("strokes", () => {
+    const area = (shape: { contours: Contour[] }) => shape.contours.reduce((sum, c) => sum + polygonArea(flatten(c)), 0);
+
+    it("paints a stroke as an outline over its element's fill", () => {
+      const parsed = parseSvg(svg('<rect x="10" y="10" width="20" height="20" fill="#f00" stroke="#00f" stroke-width="2"/>'), 100);
+      expect(parsed.shapes.map((s) => [toHex(s.color), s.label])).toEqual([["#ff0000", "rect"], ["#0000ff", "rect stroke"]]);
+      // A ring 2 wide, centered on the rectangle's edge, with mitered corners.
+      expect(Math.abs(area(parsed.shapes[1]))).toBeCloseTo(22 * 22 - 18 * 18, 3);
+    });
+
+    it("leaves an open path open, with the requested caps", () => {
+      const butt = parseSvg(svg('<path d="M10 50 H90" fill="none" stroke="#000" stroke-width="4"/>'), 100);
+      expect(Math.abs(area(butt.shapes[0]))).toBeCloseTo(80 * 4, 3);
+      const round = parseSvg(svg('<polyline points="10 50 90 50" fill="none" stroke="#000" stroke-width="4" stroke-linecap="round"/>'), 100);
+      expect(Math.abs(area(round.shapes[0]))).toBeCloseTo(80 * 4 + Math.PI * 4, 1);
+    });
+
+    it("scales stroke width with the transform and the canvas", () => {
+      const parsed = parseSvg(svg('<g transform="scale(2)"><line x1="5" y1="25" x2="45" y2="25" stroke="#000"/></g>'), 200);
+      // 80 user units long and 2 wide after the transform; the canvas doubles both.
+      expect(Math.abs(area(parsed.shapes[0]))).toBeCloseTo(160 * 4, 2);
+    });
   });
 
   it("follows use references and gradient fills", () => {

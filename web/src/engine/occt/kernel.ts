@@ -70,9 +70,14 @@ export function edgeLength(edge: TopoDS_Edge): number {
   return mass;
 }
 
-export function boundingBox(shape: TopoDS_Shape): Box {
+/**
+ * Axis-aligned bounds. The quick box can overshoot curved edges (it bounds
+ * Bezier control points); exact follows the curves, at some cost.
+ */
+export function boundingBox(shape: TopoDS_Shape, exact = false): Box {
   const box = new oc.Bnd_Box();
-  oc.BRepBndLib.Add(shape, box, false);
+  if (exact) oc.BRepBndLib.AddOptimal(shape, box, false, false);
+  else oc.BRepBndLib.Add(shape, box, false);
   const result = {
     minX: box.GetXMin(), minY: box.GetYMin(), minZ: box.GetZMin(),
     maxX: box.GetXMax(), maxY: box.GetYMax(), maxZ: box.GetZMax(),
@@ -155,6 +160,13 @@ export function edgeSamples(edge: TopoDS_Edge, count: number): Point[] {
 export function translate(shape: TopoDS_Shape, dx: number, dy: number, dz: number): TopoDS_Shape {
   const trsf = new oc.gp_Trsf();
   trsf.SetTranslation(new oc.gp_Vec(dx, dy, dz));
+  return new oc.BRepBuilderAPI_Transform(shape, trsf, false, false).Shape();
+}
+
+/** Uniform scale about the origin. */
+export function scale(shape: TopoDS_Shape, factor: number): TopoDS_Shape {
+  const trsf = new oc.gp_Trsf();
+  trsf.SetScale(pnt(0, 0), factor);
   return new oc.BRepBuilderAPI_Transform(shape, trsf, false, false).Shape();
 }
 
@@ -303,6 +315,44 @@ export function mesh(shape: TopoDS_Shape, tolerance: number, angularTolerance: n
   const indices = new Uint32Array(buffer, raw.getTrianglesPtr(), raw.getTrianglesSize()).slice();
   raw.delete();
   return { positions, indices };
+}
+
+/**
+ * Boundary loops of a planar face as polygons, curves within tolerance: the
+ * mesh edges no two triangles share. Triangles wind counterclockwise about +Z,
+ * so outer loops come out counterclockwise and holes clockwise.
+ */
+export function faceOutlines(face: TopoDS_Face, tolerance: number): Point[][] {
+  const { positions, indices } = mesh(face, tolerance, 0.1);
+  // Weld by position, in case the mesh repeats a vertex.
+  const ids = new Map<string, number>();
+  const id = (i: number) => {
+    const key = `${positions[3 * i].toFixed(6)},${positions[3 * i + 1].toFixed(6)}`;
+    if (!ids.has(key)) ids.set(key, i);
+    return ids.get(key)!;
+  };
+  const edges = new Map<string, [number, number]>();
+  for (let t = 0; t < indices.length; t += 3) {
+    for (let k = 0; k < 3; k++) {
+      const [a, b] = [id(indices[t + k]), id(indices[t + ((k + 1) % 3)])];
+      if (a === b) continue;
+      if (!edges.delete(`${b}>${a}`)) edges.set(`${a}>${b}`, [a, b]);
+    }
+  }
+  const next = new Map([...edges.values()].map(([a, b]) => [a, b]));
+  const loops: Point[][] = [];
+  for (const start of next.keys()) {
+    if (!next.has(start)) continue;
+    const loop: Point[] = [];
+    for (let v: number | undefined = start; v !== undefined && next.has(v);) {
+      loop.push([positions[3 * v], positions[3 * v + 1]]);
+      const after: number | undefined = next.get(v);
+      next.delete(v);
+      v = after;
+    }
+    if (loop.length >= 3) loops.push(loop);
+  }
+  return loops;
 }
 
 export interface StepPart { shape: TopoDS_Shape; name: string; color: readonly [number, number, number] }

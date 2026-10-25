@@ -64,7 +64,7 @@ cd web
 npm install
 npm start        # development server, opens the browser
 npm run serve    # production build, served at http://localhost:8775
-npm test         # parity with svg2step.py, fill rules, SVG parsing, slab shapes, color reduction, STEP and 3MF output
+npm test         # parity with svg2step.py, fill rules, SVG parsing, slab shapes, color reduction, thin features and brushes, STEP and 3MF output
 npm run build    # static site in web/dist
 ```
 
@@ -74,9 +74,13 @@ Differences from the Python version:
 
 - `fill-rule` is honored: `nonzero` paths fill overlapping and self-intersecting areas the way browsers do.
 - Elliptical arcs and non-uniformly scaled circles become Bezier curves; circles, circular arcs and ellipses stay exact.
-- The slab can be the canvas or a square, circle or hexagon: the smallest one around the visible art, grown by a padding in mm.
+- Strokes count: each becomes a filled outline (width, caps and joins; dashes ignored) painted over its element's fill.
+- Size is the longest side of the finished footprint: the slab, or without one, the art. The art scales to fit, so padding and minimum feature size stay true millimeters.
+- The slab can be the canvas or a square, circle or hexagon: the smallest one around the visible art, grown by a padding in mm. Its color, shared with the base, is one of the SVG's colors, by default the one with the most area.
 - Download 3MF saves a Bambu Studio file: one object with a part per color, each on its own filament, with the colors stored for Bambu Studio to map onto your filaments.
-- A Colors slider merges the SVG's colors down to as few as two. It merges the pair that looks most alike first (distance in OKLab, a perceptually uniform color space), with no dithering. A merged color is the area-weighted average of its members.
+- A Colors slider merges the SVG's colors down to as few as two. It merges the pair that looks most alike first (distance in OKLab, a perceptually uniform color space), with no dithering: the color with less area takes the other's color, so no new colors appear.
+- Min feature (mm) finds parts too thin to print by measuring each region's width along its center line. By default a thin part merges into its neighbors, retreating to where the shape is wide enough; it can instead thicken (a disc of the minimum width swept along the center line, for even strokes) or stay as it is. Corners of 60° or wider are left sharp.
+- The 2D edit tab paints per-area choices over the artwork: Merge, Thicken or Keep for thin parts under the paint, Delete for every shape the paint covers completely, Pick to click a shape away (or back), and Erase. Edits are saved with the file and undo with ⌘Z.
 - The last SVG is remembered along with the settings, so a reload picks up where you left off.
 
 `web/test/reference.json` holds svg2step.py results; regenerate it with `.venv/bin/python web/test/make_reference.py` after changing the Python version.

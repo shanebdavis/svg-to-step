@@ -30,7 +30,9 @@ function piecesByColor(svg: string) {
   const model = build(svg, { ...DEFAULT_OPTIONS, size: 100, height: HEIGHT, slabColor: null });
   expect(model.parts.every((p) => isValid(p.solid))).toBe(true);
   const byColor = new Map<string, number[]>();
-  for (const p of model.parts) byColor.set(toHex(p.color), [...(byColor.get(toHex(p.color)) ?? []), volume(p.solid) / HEIGHT]);
+  // Without a slab the art scales to fill size; undo that to compare with viewBox areas.
+  const area = (p: (typeof model.parts)[number]) => volume(p.solid) / HEIGHT / model.fit ** 2;
+  for (const p of model.parts) byColor.set(toHex(p.color), [...(byColor.get(toHex(p.color)) ?? []), area(p)]);
   return byColor;
 }
 

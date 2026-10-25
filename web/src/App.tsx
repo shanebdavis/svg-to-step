@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent } from "react";
+import { Editor, pickedShapes, strokesOf, TOOL_COLORS, type Edit, type Tool } from "./Editor";
 import { DEFAULT_OPTIONS, type BuildOptions } from "./engine/build";
 import { buildModel, loadEngine, Superseded } from "./engine/client";
 import type { BuildResult } from "./engine/protocol";
@@ -14,18 +15,29 @@ const DEFAULT_SETTINGS = {
   size: 100,
   height: 5,
   slab: true,
-  slabColor: "#808080",
   slabShape: "canvas" as BuildOptions["slabShape"],
   slabPadding: 5,
   base: false,
   baseThickness: 2,
   explode: 0,
+  minFeature: 0,
+  featureMode: "merge" as BuildOptions["featureMode"],
+  view: "3d" as "3d" | "2d",
+  tool: "merge" as Tool,
+  brushRadius: 1,
 };
+
+const TOOLS: { tool: Tool; label: string; title: string }[] = [
+  { tool: "delete", label: "Delete", title: "Deletes every shape the paint covers completely" },
+  { tool: "pick", label: "Pick", title: "Click a shape to delete it, again to restore it" },
+  { tool: "merge", label: "Merge", title: "Too-thin parts here merge into their neighbors" },
+  { tool: "thicken", label: "Thicken", title: "Too-thin parts here grow to the minimum width" },
+  { tool: "keep", label: "Keep", title: "Too-thin parts here stay as they are" },
+  { tool: "erase", label: "Erase", title: "Removes paint" },
+];
 
 type Settings = typeof DEFAULT_SETTINGS;
 type Status = { kind: "idle" | "working" | "ready" | "error"; message: string };
-
-const SLAB = "slab";
 
 const toRgb = (hex: string): RGB | null => {
   const rgba = parseColor(hex);
@@ -33,14 +45,14 @@ const toRgb = (hex: string): RGB | null => {
 };
 
 /**
- * baseColor is a hex color, SLAB for the slab's color, or null for the color with the most area.
+ * color is the slab and base color, from the SVG's palette, or null for the color with the most area.
  * maxColors limits the SVG's colors, or null keeps them all.
  */
-function toOptions(s: Settings, baseColor: string | null, maxColors: number | null): BuildOptions | null {
+function toOptions(s: Settings, color: string | null, maxColors: number | null, edits: Edit[]): BuildOptions | null {
   const layerThickness = s.layerThickness.trim() === "" ? null : Number(s.layerThickness);
   const baseThickness = s.mode === "puzzle" && s.base ? s.baseThickness : null;
   const positive = [s.size, s.height, layerThickness ?? 1, baseThickness ?? 1];
-  if (!positive.every((v) => v > 0) || !(s.slabPadding >= 0)) return null;
+  if (!positive.every((v) => v > 0) || !(s.slabPadding >= 0) || !(s.minFeature >= 0)) return null;
   return {
     ...DEFAULT_OPTIONS,
     mode: s.mode,
@@ -48,22 +60,29 @@ function toOptions(s: Settings, baseColor: string | null, maxColors: number | nu
     size: s.size,
     height: s.height,
     layerThickness,
-    slabColor: s.slab ? toRgb(s.slabColor) : null,
+    slabColor: s.slab ? (color ? toRgb(color) : null) ?? "auto" : null,
     slabShape: s.slabShape,
     slabPadding: s.slabPadding,
     baseThickness,
-    baseColor: baseColor ? toRgb(baseColor === SLAB ? s.slabColor : baseColor) : null,
+    baseColor: color ? toRgb(color) : null,
     maxColors,
+    minFeature: s.minFeature,
+    featureMode: s.featureMode,
+    strokes: strokesOf(edits),
+    deletedShapes: pickedShapes(edits),
   };
 }
 
 export function App() {
   const [settings, setSettings] = useStoredState("svg2step.settings", DEFAULT_SETTINGS);
-  const [{ file, chosenBase, colorLimit }, setDocument] = useStoredState("svg2step.document", {
+  const [{ file, chosenBase, colorLimit, edits }, setDocument] = useStoredState("svg2step.document", {
     file: null as { name: string; text: string } | null,
     chosenBase: null as string | null,
     colorLimit: null as number | null,
+    edits: [] as Edit[],
   });
+  const addEdit = (edit: Edit) => setDocument((d) => ({ ...d, edits: [...d.edits, edit] }));
+  const undo = () => setDocument((d) => ({ ...d, edits: d.edits.slice(0, -1) }));
   const setChosenBase = (base: string | null) => setDocument((d) => ({ ...d, chosenBase: base }));
   const setColorLimit = (limit: number | null) => setDocument((d) => ({ ...d, colorLimit: limit }));
   const [result, setResult] = useState<BuildResult | null>(null);
@@ -80,14 +99,13 @@ export function App() {
   }, []);
 
   const { explode, ...buildSettings } = settings;
-  const baseColor = chosenBase === SLAB && !settings.slab ? null : chosenBase;
-  const options = toOptions(settings, baseColor, colorLimit);
+  const options = toOptions(settings, chosenBase, colorLimit, edits);
   const optionsKey = JSON.stringify(options);
 
   useEffect(() => {
     if (!file) return;
     if (!options) {
-      setStatus({ kind: "error", message: "Size, height and thicknesses must be positive numbers, padding zero or more." });
+      setStatus({ kind: "error", message: "Size, height and thicknesses must be positive numbers; padding and min feature zero or more." });
       return;
     }
     let cancelled = false;
@@ -98,9 +116,12 @@ export function App() {
           if (cancelled) return;
           setResult(built);
           const { solids, colors, size, seconds } = built.stats;
+          const fixed = built.editor.changes.length;
           setStatus({
             kind: "ready",
-            message: `${solids} solids, ${colors} colors\n${size.map((v) => v.toFixed(2)).join(" × ")} mm\nbuilt in ${seconds.toFixed(1)} s`,
+            message: `${solids} solids, ${colors} colors\n${size.map((v) => v.toFixed(2)).join(" × ")} mm\n`
+              + (fixed ? `${fixed} thin part${fixed === 1 ? "" : "s"} fixed\n` : "")
+              + `built in ${seconds.toFixed(1)} s`,
           });
         },
         (error) => {
@@ -116,16 +137,29 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file, optionsKey]);
 
-  // A color limit can merge away the chosen base color.
   useEffect(() => {
-    if (result && chosenBase && chosenBase !== SLAB && !result.palette.includes(chosenBase)) setChosenBase(null);
+    if (settings.view !== "2d") return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !(e.target instanceof HTMLInputElement)) {
+        e.preventDefault();
+        undo();
+      }
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.view]);
+
+  // A color limit can merge away the chosen color.
+  useEffect(() => {
+    if (result && chosenBase && !result.palette.includes(chosenBase)) setChosenBase(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
 
   const openFile = useCallback(async (picked: File | undefined) => {
     if (!picked) return;
     const text = await picked.text();
-    setDocument({ file: { name: picked.name, text }, chosenBase: null, colorLimit: null });
+    setDocument({ file: { name: picked.name, text }, chosenBase: null, colorLimit: null, edits: [] });
     setResult(null);
   }, [setDocument]);
 
@@ -156,8 +190,7 @@ export function App() {
   const layers = buildSettings.mode === "layers";
   const base = !layers && settings.base;
   const palette = result?.palette ?? [];
-  const swatches = settings.slab && !palette.includes(settings.slabColor) ? [...palette, SLAB] : palette;
-  const selectedBase = baseColor ?? palette[0];
+  const selectedBase = chosenBase ?? palette[0];
   return (
     <div className="app">
       <aside>
@@ -175,6 +208,22 @@ export function App() {
               onChange={(e) => setColorLimit(e.target.valueAsNumber >= result.svgColors ? null : e.target.valueAsNumber)} />
           </label>
         )}
+        <div className="row">
+          <label>
+            Min feature<span>mm; 0 is off</span>
+            <input type="number" min="0" step="0.1" value={settings.minFeature}
+              onChange={(e) => update("minFeature", e.target.valueAsNumber)} />
+          </label>
+          <label>
+            Thin parts<span>unless painted</span>
+            <select value={settings.featureMode} disabled={!(settings.minFeature > 0)}
+              onChange={(e) => update("featureMode", e.target.value as Settings["featureMode"])}>
+              <option value="merge">Merge</option>
+              <option value="thicken">Thicken</option>
+              <option value="keep">Keep</option>
+            </select>
+          </label>
+        </div>
         <div className="row">
           <label>
             Mode
@@ -211,8 +260,6 @@ export function App() {
             <input type="checkbox" checked={settings.slab} onChange={(e) => update("slab", e.target.checked)} />
             Slab
           </label>
-          <input type="color" title="Slab color" disabled={!settings.slab} value={settings.slabColor}
-            onChange={(e) => update("slabColor", e.target.value)} />
         </div>
         <div className="row">
           <label>
@@ -240,19 +287,15 @@ export function App() {
             value={settings.baseThickness} onChange={(e) => update("baseThickness", e.target.valueAsNumber)} />
           <span className="unit">mm</span>
         </div>
-        {base && swatches.length > 0 && (
+        {(settings.slab || base) && palette.length > 0 && (
           <div className="field">
-            Base color<span>defaults to the color with the most area</span>
+            Base color<span>slab and base; defaults to the color with the most area</span>
             <div className="swatches" role="radiogroup" aria-label="Base color">
-              {swatches.map((swatch) => {
-                const hex = swatch === SLAB ? settings.slabColor : swatch;
-                const note = swatch === SLAB ? " (slab)" : swatch === palette[0] ? " (most area)" : "";
-                return (
-                  <button key={swatch} type="button" role="radio" aria-checked={swatch === selectedBase}
-                    className="swatch" style={{ background: hex }} title={hex + note}
-                    onClick={() => setChosenBase(swatch === palette[0] ? null : swatch)} />
-                );
-              })}
+              {palette.map((swatch) => (
+                <button key={swatch} type="button" role="radio" aria-checked={swatch === selectedBase}
+                  className="swatch" style={{ background: swatch }} title={swatch + (swatch === palette[0] ? " (most area)" : "")}
+                  onClick={() => setChosenBase(swatch === palette[0] ? null : swatch)} />
+              ))}
             </div>
           </div>
         )}
@@ -272,9 +315,40 @@ export function App() {
         <div className={`status ${status.kind}`}>{status.message}</div>
       </aside>
       <main {...dragProps}>
-        <Viewer meshes={result?.meshes ?? []} explode={explode} frameKey={`${file?.name}:${settings.size}`} />
-        {!file && <div className="hint">Drop an SVG to start</div>}
-        <div className="help">Drag to orbit · right-drag to pan · scroll to zoom</div>
+        <div className={`pane ${settings.view === "3d" ? "" : "hidden"}`}>
+          <Viewer meshes={result?.meshes ?? []} explode={explode} frameKey={`${file?.name}:${settings.size}`} />
+          {!file && <div className="hint">Drop an SVG to start</div>}
+          <div className="help">Drag to orbit · right-drag to pan · scroll to zoom</div>
+        </div>
+        {settings.view === "2d" && (
+          <div className="pane">
+            <Editor editor={result?.editor ?? null} edits={edits} tool={settings.tool} radius={settings.brushRadius} onEdit={addEdit} />
+            <div className="toolbar">
+              {TOOLS.map(({ tool, label, title }) => (
+                <button key={tool} type="button" title={title} aria-pressed={settings.tool === tool}
+                  style={{ "--tool": TOOL_COLORS[tool] } as CSSProperties} onClick={() => update("tool", tool)}>
+                  {label}
+                </button>
+              ))}
+              <label className="inline" title="Brush radius, mm">
+                Brush
+                <input type="number" min="0.1" step="0.5" value={settings.brushRadius}
+                  onChange={(e) => e.target.valueAsNumber > 0 && update("brushRadius", e.target.valueAsNumber)} />
+                <span className="unit">mm</span>
+              </label>
+              <button type="button" disabled={!edits.length} onClick={undo} title="Undo (⌘Z)">Undo</button>
+              <button type="button" disabled={!edits.length} onClick={() => setDocument((d) => ({ ...d, edits: [] }))}>Clear</button>
+            </div>
+            <div className="help">Paint with the left button · right-drag to pan · scroll to zoom</div>
+          </div>
+        )}
+        <div className="tabs" role="tablist">
+          {(["3d", "2d"] as const).map((view) => (
+            <button key={view} type="button" role="tab" aria-selected={settings.view === view} onClick={() => update("view", view)}>
+              {view === "3d" ? "3D preview" : "2D edit"}
+            </button>
+          ))}
+        </div>
       </main>
     </div>
   );

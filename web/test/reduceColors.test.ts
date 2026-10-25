@@ -1,22 +1,16 @@
-/** Color reduction: merge the most alike colors first, weighted by area. */
+/** Color reduction: merge the most alike colors first, into the one with more area. */
 
 import { readFileSync } from "node:fs";
 import opencascade from "replicad-opencascadejs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { build, DEFAULT_OPTIONS } from "../src/engine/build";
 import { isValid, setOC, volume } from "../src/engine/occt/kernel";
-import { fromOklab, reduceColors, toOklab } from "../src/engine/reduceColors";
+import { reduceColors } from "../src/engine/reduceColors";
 import { toHex, type RGB } from "../src/engine/svg/color";
 
 const hex = (colors: readonly RGB[]) => colors.map(toHex);
 
 describe("reduceColors", () => {
-  it("round-trips through OKLab", () => {
-    for (const rgb of [[0, 0, 0], [1, 1, 1], [0.9, 0.2, 0.4], [0.1, 0.6, 0.3]] as RGB[]) {
-      fromOklab(toOklab(rgb)).forEach((v, i) => expect(v).toBeCloseTo(rgb[i], 6));
-    }
-  });
-
   it("merges the two colors that look most alike", () => {
     const colors = [
       { color: [1, 0, 0] as RGB, area: 10 },
@@ -36,12 +30,19 @@ describe("reduceColors", () => {
     expect(reduced[0]).not.toBe(reduced[1]);
   });
 
-  it("weights a merged color by area", () => {
-    const reduced = reduceColors([{ color: [1, 1, 1], area: 99 }, { color: [0.9, 0.9, 1], area: 1 }], 1);
-    const [r, g, b] = reduced[0];
-    expect(r).toBeGreaterThan(0.99);
-    expect(b).toBeCloseTo(1, 3);
-    expect(g).toBeCloseTo(r, 4);
+  it("gives the merged pair the color with more area, inventing none", () => {
+    const reduced = reduceColors([{ color: [0.9, 0.9, 1], area: 1 }, { color: [1, 1, 1], area: 99 }], 1);
+    expect(reduced).toEqual([[1, 1, 1], [1, 1, 1]]);
+  });
+
+  it("keeps a merged group's color when it absorbs more", () => {
+    const colors = [
+      { color: [1, 0, 0] as RGB, area: 50 },
+      { color: [0.95, 0.05, 0.05] as RGB, area: 10 },
+      { color: [0.9, 0.1, 0.1] as RGB, area: 5 },
+      { color: [0, 0, 1] as RGB, area: 30 },
+    ];
+    expect(hex(reduceColors(colors, 2))).toEqual(["#ff0000", "#ff0000", "#ff0000", "#0000ff"]);
   });
 
   it("leaves colors alone when there are no more than the target", () => {
