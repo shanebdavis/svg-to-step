@@ -1,8 +1,8 @@
 /**
  * SVG to colored solids. Mirrors svg2step.py:
  *
- * Puzzle mode: the canvas becomes a slab with every painted shape cut out of
- * it, and each visible connected single-color region is a solid filling its
+ * Puzzle mode: the canvas, or a square, circle or hexagon wrapped around the
+ * art, becomes a slab with every painted shape cut out of it, and each visible connected single-color region is a solid filling its
  * cutout exactly. An optional single-color base sits under the puzzle.
  *
  * Layers mode: one layer per color, stacked by area. Each layer covers its own
@@ -17,9 +17,10 @@ import { toHex, type RGB } from "./svg/color";
 import { parseSvg } from "./svg/parseSvg";
 import type { Point } from "./svg/geometry";
 import {
-  area, boundingBox, common, cut, distanceToPoint, edgeLength, edgeSamples, edgesOf, extrude,
-  facesFromContours, facesOf, fuse, rectangleFace, repairFace, unifyFaces, withoutHoles, type Box,
+  area, boundingBox, common, cut, distanceToPoint, edgeLength, edgeSamples, edgesOf, extrude, faceFromWires,
+  facesFromContours, facesOf, fuse, mesh, rectangleFace, repairFace, unifyFaces, wireFromContour, withoutHoles, type Box,
 } from "./occt/kernel";
+import { wrapContour, type WrapShape } from "./wrap";
 
 export interface BuildOptions {
   /** Longest side of the canvas, mm. */
@@ -28,6 +29,10 @@ export interface BuildOptions {
   height: number;
   /** Slab color, or null for no slab. */
   slabColor: RGB | null;
+  /** The canvas rectangle, or a shape wrapped around the visible art. */
+  slabShape: "canvas" | WrapShape;
+  /** Gap between the art and a wrapped slab's edge, mm. */
+  slabPadding: number;
   mode: "puzzle" | "layers";
   /** Layers mode: which colors sit lowest. */
   order: "large" | "small";
@@ -35,7 +40,7 @@ export interface BuildOptions {
   layerThickness: number | null;
   /**
    * Puzzle mode: thickness of a solid base under the puzzle, or null for no base.
-   * The base covers the canvas, or without a slab, the outline of the art with holes filled.
+   * The base covers the slab, or without one, the outline of the art with holes filled.
    */
   baseThickness: number | null;
   /** Base color, or null for the color covering the most area. */
@@ -45,7 +50,7 @@ export interface BuildOptions {
 }
 
 export const DEFAULT_OPTIONS: BuildOptions = {
-  size: 150, height: 5, slabColor: [128 / 255, 128 / 255, 128 / 255],
+  size: 100, height: 5, slabColor: [128 / 255, 128 / 255, 128 / 255], slabShape: "canvas", slabPadding: 5,
   mode: "puzzle", order: "large", layerThickness: null, baseThickness: null, baseColor: null, minArea: 0.5,
 };
 
@@ -153,6 +158,17 @@ export function layerThicknesses(count: number, height: number, layerThickness: 
   return [bottom, ...Array(count - 1).fill(layerThickness)];
 }
 
+/** The slab outline: the canvas, or a shape around the art clipped to the canvas. */
+function slabFace(options: BuildOptions, canvas: TopoDS_Face, covered: TopoDS_Shape | null) {
+  if (!options.slabColor || options.slabShape === "canvas" || !covered) return { slab: canvas, art: covered };
+  const art = common(covered, canvas);
+  const box = boundingBox(art);
+  const { positions } = mesh(art, Math.max(box.maxX - box.minX, box.maxY - box.minY) * 1e-4, 0.05);
+  const points = Array.from({ length: positions.length / 3 }, (_, i): Point => [positions[3 * i], positions[3 * i + 1]]);
+  const wire = wireFromContour(wrapContour(points, options.slabShape, options.slabPadding));
+  return { slab: faceFromWires(wire, []), art };
+}
+
 export function build(svgText: string, options: BuildOptions): Model {
   const svg = parseSvg(svgText, options.size);
   const colorOf = new Map<Key, RGB>();
@@ -166,7 +182,8 @@ export function build(svgText: string, options: BuildOptions): Model {
   const { byColor, covered } = visibleRegions(painted, canvas);
   let regions = new Map<Key, TopoDS_Face[]>();
   for (const [key, faces] of byColor) regions.set(key, mergeTouching(faces));
-  if (options.slabColor) regions.set(BACKGROUND, covered ? facesOf(cut(canvas, covered)) : [canvas]);
+  const { slab, art } = slabFace(options, canvas, covered);
+  if (options.slabColor) regions.set(BACKGROUND, art ? facesOf(cut(slab, art)) : [slab]);
   regions = absorbSlivers(regions, options.minArea, Math.max(svg.width, svg.height) * 1e-6);
   const background = regions.get(BACKGROUND) ?? [];
   regions.delete(BACKGROUND);
@@ -182,7 +199,7 @@ export function build(svgText: string, options: BuildOptions): Model {
     const { baseThickness } = options;
     if (baseThickness) {
       const color = options.baseColor ?? palette[0]?.color ?? options.slabColor ?? DEFAULT_OPTIONS.slabColor!;
-      const footprint = options.slabColor ? [canvas] : outline([...regions.values()].flat());
+      const footprint = options.slabColor ? [slab] : outline([...regions.values()].flat());
       footprint.forEach((face, i) => parts.push({
         solid: extrude(face, 0, baseThickness), label: `base-${i + 1}`, color, level: 0,
       }));

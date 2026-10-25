@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from "react"
 import { DEFAULT_OPTIONS, type BuildOptions } from "./engine/build";
 import { buildModel, loadEngine, Superseded } from "./engine/client";
 import type { BuildResult } from "./engine/protocol";
+import { export3mf } from "./engine/threemf";
 import { parseColor, type RGB } from "./engine/svg/color";
 import { useStoredState } from "./useStoredState";
 import { Viewer } from "./Viewer";
@@ -10,10 +11,12 @@ const DEFAULT_SETTINGS = {
   mode: "puzzle" as BuildOptions["mode"],
   order: "large" as BuildOptions["order"],
   layerThickness: "",
-  size: 150,
+  size: 100,
   height: 5,
   slab: true,
   slabColor: "#808080",
+  slabShape: "canvas" as BuildOptions["slabShape"],
+  slabPadding: 5,
   base: false,
   baseThickness: 2,
   explode: 0,
@@ -34,7 +37,7 @@ function toOptions(s: Settings, baseColor: string | null): BuildOptions | null {
   const layerThickness = s.layerThickness.trim() === "" ? null : Number(s.layerThickness);
   const baseThickness = s.mode === "puzzle" && s.base ? s.baseThickness : null;
   const positive = [s.size, s.height, layerThickness ?? 1, baseThickness ?? 1];
-  if (!positive.every((v) => v > 0)) return null;
+  if (!positive.every((v) => v > 0) || !(s.slabPadding >= 0)) return null;
   return {
     ...DEFAULT_OPTIONS,
     mode: s.mode,
@@ -43,6 +46,8 @@ function toOptions(s: Settings, baseColor: string | null): BuildOptions | null {
     height: s.height,
     layerThickness,
     slabColor: s.slab ? toRgb(s.slabColor) : null,
+    slabShape: s.slabShape,
+    slabPadding: s.slabPadding,
     baseThickness,
     baseColor: baseColor ? toRgb(baseColor === SLAB ? s.slabColor : baseColor) : null,
   };
@@ -50,8 +55,11 @@ function toOptions(s: Settings, baseColor: string | null): BuildOptions | null {
 
 export function App() {
   const [settings, setSettings] = useStoredState("svg2step.settings", DEFAULT_SETTINGS);
-  const [file, setFile] = useState<{ name: string; text: string } | null>(null);
-  const [chosenBase, setChosenBase] = useState<string | null>(null);
+  const [{ file, chosenBase }, setDocument] = useStoredState("svg2step.document", {
+    file: null as { name: string; text: string } | null,
+    chosenBase: null as string | null,
+  });
+  const setChosenBase = (base: string | null) => setDocument((d) => ({ ...d, chosenBase: base }));
   const [result, setResult] = useState<BuildResult | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle", message: "Loading CAD engine…" });
   const [dragging, setDragging] = useState(false);
@@ -73,7 +81,7 @@ export function App() {
   useEffect(() => {
     if (!file) return;
     if (!options) {
-      setStatus({ kind: "error", message: "Size, height and thicknesses must be positive numbers." });
+      setStatus({ kind: "error", message: "Size, height and thicknesses must be positive numbers, padding zero or more." });
       return;
     }
     let cancelled = false;
@@ -104,17 +112,17 @@ export function App() {
 
   const openFile = useCallback(async (picked: File | undefined) => {
     if (!picked) return;
-    setFile({ name: picked.name, text: await picked.text() });
+    const text = await picked.text();
+    setDocument({ file: { name: picked.name, text }, chosenBase: null });
     setResult(null);
-    setChosenBase(null);
-  }, []);
+  }, [setDocument]);
 
-  const download = () => {
-    if (!result || !file) return;
-    const url = URL.createObjectURL(new Blob([result.step as BlobPart], { type: "application/step" }));
+  const baseName = file?.name.replace(/\.svg$/i, "") ?? "model";
+  const download = (bytes: Uint8Array, extension: string, type: string) => {
+    const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = file.name.replace(/\.svg$/i, "") + ".step";
+    link.download = `${baseName}.${extension}`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -187,6 +195,23 @@ export function App() {
           <input type="color" title="Slab color" disabled={!settings.slab} value={settings.slabColor}
             onChange={(e) => update("slabColor", e.target.value)} />
         </div>
+        <div className="row">
+          <label>
+            Slab shape<span>outer edge</span>
+            <select value={settings.slabShape} disabled={!settings.slab}
+              onChange={(e) => update("slabShape", e.target.value as Settings["slabShape"])}>
+              <option value="canvas">Canvas</option>
+              <option value="square">Square</option>
+              <option value="circle">Circle</option>
+              <option value="hexagon">Hexagon</option>
+            </select>
+          </label>
+          <label>
+            Padding<span>around the art, mm</span>
+            <input type="number" min="0" step="0.5" disabled={!settings.slab || settings.slabShape === "canvas"}
+              value={settings.slabPadding} onChange={(e) => update("slabPadding", e.target.valueAsNumber)} />
+          </label>
+        </div>
         <div className="toggle">
           <label className="check">
             <input type="checkbox" disabled={layers} checked={settings.base} onChange={(e) => update("base", e.target.checked)} />
@@ -216,8 +241,14 @@ export function App() {
           Explode<span>preview only: lifts pieces or layers apart</span>
           <input type="range" min="0" max="3" step="0.05" value={explode} onChange={(e) => update("explode", e.target.valueAsNumber)} />
         </label>
-        <button type="button" className="primary" disabled={!result || status.kind === "working"} onClick={download}>
+        <button type="button" className="primary" disabled={!result || status.kind === "working"}
+          onClick={() => result && download(result.step, "step", "application/step")}>
           Download STEP
+        </button>
+        <button type="button" className="primary" disabled={!result || status.kind === "working"}
+          title="Bambu Studio: a part per color, each on its own filament"
+          onClick={() => result && download(export3mf(result.meshes, baseName), "3mf", "model/3mf")}>
+          Download 3MF
         </button>
         <div className={`status ${status.kind}`}>{status.message}</div>
       </aside>
